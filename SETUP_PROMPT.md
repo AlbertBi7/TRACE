@@ -29,10 +29,8 @@ Install the following before running the project:
 
 ## Clone
 
-Replace the placeholder URL with the actual repository URL:
-
 ```bash
-git clone <TRACE_REPOSITORY_URL> trace
+git clone https://github.com/AlbertBi7/TRACE.git trace
 cd trace
 ```
 
