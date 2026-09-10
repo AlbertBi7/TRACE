@@ -1,0 +1,24 @@
+# Local secrets and environment files
+infra/.env
+.env
+
+# Dependencies
+frontend/node_modules/
+
+# Generated frontend output
+frontend/dist/
+
+# Python caches and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime uploads and local data
+uploads/
+*.log
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

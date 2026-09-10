@@ -1,0 +1,139 @@
+services:
+  # ─── PostgreSQL ─────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: trace-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      # Init scripts must be FILES directly under /docker-entrypoint-initdb.d
+      # (a mounted subdirectory is not executed by the entrypoint).
+      - ../db/postgres/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ../db/postgres/seed.sql:/docker-entrypoint-initdb.d/99_seed.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - trace-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ─── Neo4j ──────────────────────────────────────────────
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: trace-neo4j
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      NEO4J_PLUGINS: '[]'
+    volumes:
+      - neo4j-data:/data
+      - ../db/neo4j:/neo4j-init:ro
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    networks:
+      - trace-net
+    healthcheck:
+      # cypher-shell exits 0 only once the DB accepts bolt queries.
+      # ${NEO4J_PASSWORD} is interpolated by compose from infra/.env at config time
+      # (the container itself only knows NEO4J_AUTH, not NEO4J_PASSWORD).
+      # Generous timeout + start_period: first boot sets the initial password and
+      # builds system indexes; on low-memory hosts each check can take >10s, and
+      # short timeouts make checks pile up faster than the server can start.
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p '${NEO4J_PASSWORD}' 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 30s
+      retries: 30
+      start_period: 90s
+
+  # ─── Neo4j Init (one-shot: constraints + optional demo seed) ────
+  # Always applies constraints.cypher (idempotent). Demo data handling is
+  # controlled by TRACE_RESEED_DEMO in infra/.env:
+  #   true  (default) — clear the demo case and re-apply seed.cypher so the
+  #                     demo graph matches the checked-in fixture exactly.
+  #                     Safe on persistent volumes: seed.cypher is MERGE-based
+  #                     (idempotent) and the clear removes only demo-case data.
+  #   false           — skip demo data entirely; existing graph data is left
+  #                     untouched (use for persistent/non-demo deployments).
+  neo4j-init:
+    image: neo4j:5.20-community
+    container_name: trace-neo4j-init
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ../db/neo4j:/neo4j-init:ro
+    environment:
+      TRACE_RESEED_DEMO: ${TRACE_RESEED_DEMO:-true}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        # cypher-shell defaults to localhost; the init runs in its own container,
+        # so target the neo4j service explicitly.
+        echo "TRACE neo4j-init: applying constraints..."
+        cat /neo4j-init/constraints.cypher | cypher-shell -a neo4j:7687 -u neo4j -p '${NEO4J_PASSWORD}' --format plain
+        if [ "${TRACE_RESEED_DEMO}" = "true" ]; then
+          echo "TRACE neo4j-init: clearing previous demo case (idempotent reseed)..."
+          printf "MATCH (n) WHERE 'c0000000-0000-0000-0000-000000000001' IN n.case_ids DETACH DELETE n;\n" | cypher-shell -a neo4j:7687 -u neo4j -p '${NEO4J_PASSWORD}' --format plain
+          echo "TRACE neo4j-init: applying demo seed..."
+          cat /neo4j-init/seed.cypher | cypher-shell -a neo4j:7687 -u neo4j -p '${NEO4J_PASSWORD}' --format plain
+        else
+          echo "TRACE neo4j-init: TRACE_RESEED_DEMO=false — skipping demo seed (existing data preserved)."
+        fi
+        echo "TRACE neo4j-init: done."
+    networks:
+      - trace-net
+    restart: "no"
+
+  # ─── FastAPI Backend ────────────────────────────────────
+  api:
+    build:
+      context: ../services/api
+      dockerfile: Dockerfile
+    container_name: trace-api
+    env_file:
+      - .env
+    volumes:
+      - uploads:/uploads
+      - ../services/api:/app
+      # Startup migration runner reads these (settings.migrations_dir = db/postgres/migrations)
+      - ../db/postgres/migrations:/app/db/postgres/migrations:ro
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - trace-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ─── React Frontend ────────────────────────────────────
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: trace-frontend
+    ports:
+      - "5173:80"
+    networks:
+      - trace-net
+    depends_on:
+      - api
+
+volumes:
+  pg-data:
+  neo4j-data:
+  uploads:
+
+networks:
+  trace-net:
+    driver: bridge
