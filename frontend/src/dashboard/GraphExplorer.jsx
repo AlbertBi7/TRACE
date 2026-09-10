@@ -84,11 +84,9 @@ function cyStyle() {
         height: 26,
         'border-width': 1,
         'border-color': '#1e2d44',
+        'border-style': (ele) => ele.data('inCase') ? 'solid' : 'dashed',
+        opacity: (ele) => ele.data('inCase') ? 1 : 0.65,
       },
-    },
-    {
-      selector: 'node[?inCase = false]',
-      style: { 'border-style': 'dashed', opacity: 0.65 },
     },
     {
       selector: 'edge',
@@ -175,6 +173,7 @@ export default function GraphExplorer() {
   const [heuristics, setHeuristics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState('');
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [layoutName, setLayoutName] = useState('cose');
@@ -223,12 +222,13 @@ export default function GraphExplorer() {
   useEffect(() => { loadGraph(); }, [loadGraph]);
 
   const handleSync = async () => {
+    setSyncError('');
     setSyncing(true);
     try {
       await api.post(`/api/cases/${caseId}/graph/sync`);
       await loadGraph();
     } catch (err) {
-      alert(err.response?.data?.detail || 'Sync failed');
+      setSyncError(err.response?.data?.detail || 'Sync failed');
     } finally {
       setSyncing(false);
     }
@@ -253,7 +253,6 @@ export default function GraphExplorer() {
       cyRef.current = cytoscape({
         container: containerRef.current,
         style: cyStyle(),
-        wheelSensitivity: 0.2,
       });
       cyRef.current.on('tap', 'node', async (evt) => {
         setSelectedNode(evt.target.data());
@@ -331,7 +330,7 @@ export default function GraphExplorer() {
       else e.addClass('faded');
     });
     setPathResult({ found: true, hops: path.length - 1, path });
-    cy.animate({ fit: { eles: cy.elements('[class~="highlighted"]'), padding: 70 } }, { duration: 300 });
+    cy.animate({ fit: { eles: cy.elements('.highlighted'), padding: 70 } }, { duration: 300 });
   };
 
   const clearHighlight = () => {
@@ -353,7 +352,7 @@ export default function GraphExplorer() {
       if (both) e.addClass('highlighted');
       else if (adjacent) e.addClass('faded');
     });
-    cy.animate({ fit: { eles: cy.elements('[class~="highlighted"]'), padding: 70 } }, { duration: 300 });
+    cy.animate({ fit: { eles: cy.elements('.highlighted'), padding: 70 } }, { duration: 300 });
   };
 
   // Highlight fragmented-away nodes after a removal simulation
@@ -411,6 +410,7 @@ export default function GraphExplorer() {
           </button>
         </div>
       </div>
+      {syncError && <div className="px-4 py-2 bg-trace-danger/10 border-b border-trace-danger/30 text-xs text-trace-danger" role="status">{syncError}</div>}
 
       {/* Filters + path tool */}
       <div className="flex flex-wrap items-center gap-3 px-4 py-2 bg-trace-surface-2 border-b border-trace-border text-xs">

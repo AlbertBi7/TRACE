@@ -1,7 +1,7 @@
 /**
  * TRACE — Case Detail Page
  * Overview of a single case with documents panel and graph explorer link.
- * Document upload will be fully wired in Milestone 2.
+ * Documents are uploaded and extracted through the case-scoped API.
  */
 
 import { useState, useEffect, useRef } from 'react';
@@ -28,15 +28,14 @@ export default function CaseDetailPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [actionNotice, setActionNotice] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const [merges, setMerges] = useState({ suggested: [], accepted: [], undone: [] });
   const [extractingId, setExtractingId] = useState(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [decidingMergeId, setDecidingMergeId] = useState(null);
   const fileInputRef = useRef(null);
-
-  useEffect(() => {
-    fetchCase();
-    fetchMerges();
-  }, [caseId]);
 
   const fetchCase = async () => {
     try {
@@ -54,6 +53,18 @@ export default function CaseDetailPage() {
       setLoading(false);
     }
   };
+
+  const fetchMerges = async () => {
+    try {
+      const { data } = await api.get(`/api/cases/${caseId}/resolution/merges`);
+      setMerges(data);
+    } catch { /* resolution optional until data exists */ }
+  };
+
+  useEffect(() => {
+    fetchCase();
+    fetchMerges();
+  }, [caseId]);
 
   if (loading) {
     return (
@@ -94,38 +105,46 @@ export default function CaseDetailPage() {
     }
   };
 
-  const fetchMerges = async () => {
-    try {
-      const { data } = await api.get(`/api/cases/${caseId}/resolution/merges`);
-      setMerges(data);
-    } catch { /* resolution optional until data exists */ }
-  };
-
   const decideMerge = async (mergeId, action) => {
+    setActionError('');
+    setActionNotice('');
+    setDecidingMergeId(mergeId);
     try {
       await api.post(`/api/cases/${caseId}/resolution/merges/${mergeId}/${action}`);
-      fetchMerges();
+      await fetchMerges();
+      setActionNotice(action === 'accept' ? 'Merge accepted and queued for graph sync.' : 'Merge dismissed.');
     } catch (err) {
-      alert(err.response?.data?.detail || 'Failed to update merge');
+      setActionError(err.response?.data?.detail || 'Failed to update merge');
+    } finally {
+      setDecidingMergeId(null);
     }
   };
 
   const runSuggest = async () => {
+    setActionError('');
+    setActionNotice('');
+    setSuggesting(true);
     try {
       await api.post(`/api/cases/${caseId}/resolution/suggest`);
-      fetchMerges();
+      await fetchMerges();
+      setActionNotice('Match suggestions refreshed. Review each candidate before accepting.');
     } catch (err) {
-      alert(err.response?.data?.detail || 'Suggestion run failed');
+      setActionError(err.response?.data?.detail || 'Suggestion run failed');
+    } finally {
+      setSuggesting(false);
     }
   };
 
   const handleExtract = async (docId) => {
+    setActionError('');
+    setActionNotice('');
     setExtractingId(docId);
     try {
       await api.post(`/api/cases/${caseId}/documents/${docId}/extract`, {});
-      fetchCase();
+      await fetchCase();
+      setActionNotice('Extraction complete. Review matches before syncing the graph.');
     } catch (err) {
-      alert(err.response?.data?.detail || 'Extraction failed');
+      setActionError(err.response?.data?.detail || 'Extraction failed');
     } finally {
       setExtractingId(null);
       fetchMerges();
@@ -220,7 +239,7 @@ export default function CaseDetailPage() {
                           {doc.extraction_count ? ` · ${doc.extraction_count} extracted items` : ''}
                         </p>
                       </div>
-                      {doc.extracted ? (
+                      {doc.extracted || doc.extraction_count > 0 ? (
                         <span className="badge-open badge">Extracted</span>
                       ) : (
                         <button
@@ -274,10 +293,15 @@ export default function CaseDetailPage() {
                 <GitMerge className="w-5 h-5 text-trace-primary" />
                 Entity Matches
               </h2>
-              <button onClick={runSuggest} className="btn-secondary py-1 px-3 text-xs">
-                Find Matches
+              <button disabled={suggesting} onClick={runSuggest} className="btn-secondary py-1 px-3 text-xs">
+                {suggesting ? 'Finding…' : 'Find Matches'}
               </button>
             </div>
+            {(actionError || actionNotice) && (
+              <p className={`text-xs mb-3 ${actionError ? 'text-trace-danger' : 'text-trace-success'}`} role="status">
+                {actionError || actionNotice}
+              </p>
+            )}
             {merges.suggested.length === 0 && merges.accepted.length === 0 && merges.undone.length === 0 ? (
               <p className="text-sm text-trace-text-dim">
                 No pending matches. Upload documents, run extraction, then click "Find Matches".
@@ -296,8 +320,8 @@ export default function CaseDetailPage() {
                       {m.method === 'shared_attribute' ? 'Shared phone/account reference' : 'Similar name (string distance)'}
                     </p>
                     <div className="flex gap-2">
-                      <button onClick={() => decideMerge(m.id, 'accept')} className="btn-primary py-1 px-3 text-xs">Same entity</button>
-                      <button onClick={() => decideMerge(m.id, 'undo')} className="btn-secondary py-1 px-3 text-xs">Dismiss</button>
+                      <button disabled={decidingMergeId === m.id} onClick={() => decideMerge(m.id, 'accept')} className="btn-primary py-1 px-3 text-xs">{decidingMergeId === m.id ? 'Saving…' : 'Same entity'}</button>
+                      <button disabled={decidingMergeId === m.id} onClick={() => decideMerge(m.id, 'undo')} className="btn-secondary py-1 px-3 text-xs">Dismiss</button>
                     </div>
                   </div>
                 ))}

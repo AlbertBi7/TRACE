@@ -32,6 +32,12 @@ export default function LoginPage() {
     }
   };
 
+  const useDemoAccount = (accountEmail, accountPassword) => {
+    setEmail(accountEmail);
+    setPassword(accountPassword);
+    setError('');
+  };
+
   return (
     <div className="min-h-screen bg-trace-bg flex items-center justify-center p-4 relative overflow-hidden">
       {/* Background Effects */}
@@ -137,6 +143,26 @@ export default function LoginPage() {
               )}
             </button>
           </form>
+
+          <div className="mt-6 border-t border-trace-border pt-4">
+            <p className="text-xs text-trace-text-dim mb-2">Demo accounts</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => useDemoAccount('admin@trace.dev', 'TraceAdmin123!')}
+                className="btn-secondary py-2 text-xs"
+              >
+                Use Admin demo
+              </button>
+              <button
+                type="button"
+                onClick={() => useDemoAccount('investigator@trace.dev', 'TraceInvestigator123!')}
+                className="btn-secondary py-2 text-xs"
+              >
+                Use Investigator demo
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Footer */}
