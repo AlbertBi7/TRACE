@@ -30,6 +30,14 @@ function useSSEChat(caseId) {
     try {
       const url = `${API_BASE}/api/cases/${caseId}/chat?q=${encodeURIComponent(question)}`;
       const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+      if (!resp.ok || !resp.body) {
+        let detail = `Chat request failed (${resp.status})`;
+        try {
+          const body = await resp.json();
+          detail = body.detail || detail;
+        } catch { /* response may not be JSON */ }
+        throw new Error(detail);
+      }
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
@@ -67,7 +75,7 @@ function useSSEChat(caseId) {
       }
     } catch (e) {
       if (e.name !== 'AbortError') {
-        setMessages((m) => [...m.slice(0, -1), { role: 'assistant', text: 'Chat request failed.', isError: true }]);
+        setMessages((m) => [...m.slice(0, -1), { role: 'assistant', text: e.message || 'Chat request failed.', isError: true }]);
       }
     } finally {
       setStreaming(false);
@@ -135,7 +143,7 @@ function ChatTab({ caseId, people, onPath }) {
           placeholder="How is X connected to Y?"
           className="input-field flex-1 text-xs"
         />
-        <button type="submit" disabled={streaming || !input.trim()} className="btn-primary px-3">
+        <button type="submit" aria-label="Send" title="Send question" disabled={streaming || !input.trim()} className="btn-primary px-3">
           <Send className="w-3.5 h-3.5" />
         </button>
       </form>
@@ -147,16 +155,18 @@ function SimulateTab({ caseId, nodes, onHighlight, articulationPoints }) {
   const [target, setTarget] = useState('');
   const [result, setResult] = useState(null);
   const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
 
   const run = async () => {
     if (!target) return;
+    setError('');
     setRunning(true);
     try {
       const { data } = await api.post(`/api/cases/${caseId}/analysis/simulate-removal/${target}`);
       setResult(data);
       if (onHighlight && data.metrics) onHighlight(data.metrics.fragmented_away);
     } catch (err) {
-      alert(err.response?.data?.detail || 'Simulation failed');
+      setError(err.response?.data?.detail || 'Simulation failed');
     } finally {
       setRunning(false);
     }
@@ -177,6 +187,7 @@ function SimulateTab({ caseId, nodes, onHighlight, articulationPoints }) {
           <Scissors className="w-3.5 h-3.5" /> Simulate
         </button>
       </div>
+      {error && <p className="text-trace-danger" role="status">{error}</p>}
 
       {result && !result.metrics && (
         <p className="text-trace-text-dim">Entity is not part of the connected network.</p>
@@ -225,15 +236,20 @@ function SimulateTab({ caseId, nodes, onHighlight, articulationPoints }) {
 function PriorityTab({ caseId }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     api.get(`/api/cases/${caseId}/priority-scores`)
       .then(({ data }) => setData(data))
-      .catch(() => setData({ scores: [] }))
+      .catch((err) => {
+        setError(err.response?.data?.detail || 'Priority scores could not be loaded.');
+        setData({ scores: [] });
+      })
       .finally(() => setLoading(false));
   }, [caseId]);
 
   if (loading) return <div className="p-4 text-xs text-trace-text-dim">Computing…</div>;
+  if (error) return <div className="p-4 text-xs text-trace-danger" role="status">{error}</div>;
   if (!data?.scores?.length) return <div className="p-4 text-xs text-trace-text-dim">No scores yet — sync the graph first.</div>;
 
   return (

@@ -35,7 +35,7 @@ async def list_documents(case_id: str, current_user: dict = Depends(get_current_
 
     rows = await pool.fetch(
         """SELECT d.id, d.filename, d.filetype, d.uploaded_by, d.uploaded_at,
-                  d.page_count, u.full_name AS uploader_name
+              d.page_count, d.extracted, u.full_name AS uploader_name
            FROM documents d
            LEFT JOIN users u ON u.id = d.uploaded_by
            WHERE d.case_id = $1
@@ -60,6 +60,7 @@ async def list_documents(case_id: str, current_user: dict = Depends(get_current_
             "uploader_name": r["uploader_name"],
             "uploaded_at": r["uploaded_at"].isoformat(),
             "page_count": r["page_count"] or 0,
+            "extracted": r["extracted"],
             "extraction_count": counts.get(str(r["id"]), 0),
         }
         for r in rows
