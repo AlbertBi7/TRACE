@@ -139,12 +139,24 @@ async def _fetch_provenance(prov_ids: list[str]) -> list[dict]:
     """Verbatim snippets for provenance ids (path nodes/edges)."""
     if not prov_ids:
         return []
+    # Seed demo uses fake ids like 'ext-001' that are not UUIDs — filter them
+    # to avoid asyncpg DataError: invalid input for query argument $1::uuid[]
+    import uuid as _uuid
+    valid_ids = []
+    for pid in prov_ids:
+        try:
+            _uuid.UUID(str(pid))
+            valid_ids.append(pid)
+        except (ValueError, AttributeError):
+            continue
+    if not valid_ids:
+        return []
     pool = await get_pool()
     rows = await pool.fetch(
         """SELECT e.id, e.snippet, e.page, e.paragraph, d.filename
            FROM extraction_log e JOIN documents d ON d.id = e.document_id
            WHERE e.id = ANY($1::uuid[]) LIMIT 8""",
-        prov_ids,
+        valid_ids,
     )
     return [
         {
