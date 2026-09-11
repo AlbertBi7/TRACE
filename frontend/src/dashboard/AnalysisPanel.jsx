@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import api from '../lib/api';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 function useSSEChat(caseId) {
   const [messages, setMessages] = useState([]);

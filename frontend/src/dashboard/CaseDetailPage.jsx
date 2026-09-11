@@ -112,7 +112,15 @@ export default function CaseDetailPage() {
     try {
       await api.post(`/api/cases/${caseId}/resolution/merges/${mergeId}/${action}`);
       await fetchMerges();
-      setActionNotice(action === 'accept' ? 'Merge accepted and queued for graph sync.' : 'Merge dismissed.');
+      try {
+        await api.post(`/api/cases/${caseId}/graph/sync`);
+        setActionNotice(action === 'accept' ? 'Merge accepted and graph synced.' : 'Merge dismissed and graph synced.');
+      } catch (syncErr) {
+        setActionNotice(action === 'accept'
+          ? 'Merge accepted. Sync the graph before reviewing the updated links.'
+          : 'Merge dismissed. Sync the graph before reviewing the updated links.');
+        setActionError(syncErr.response?.data?.detail || 'Graph sync failed');
+      }
     } catch (err) {
       setActionError(err.response?.data?.detail || 'Failed to update merge');
     } finally {
@@ -321,7 +329,7 @@ export default function CaseDetailPage() {
                     </p>
                     <div className="flex gap-2">
                       <button disabled={decidingMergeId === m.id} onClick={() => decideMerge(m.id, 'accept')} className="btn-primary py-1 px-3 text-xs">{decidingMergeId === m.id ? 'Saving…' : 'Same entity'}</button>
-                      <button disabled={decidingMergeId === m.id} onClick={() => decideMerge(m.id, 'undo')} className="btn-secondary py-1 px-3 text-xs">Dismiss</button>
+                      <button disabled={decidingMergeId === m.id} onClick={() => decideMerge(m.id, 'dismiss')} className="btn-secondary py-1 px-3 text-xs">Dismiss</button>
                     </div>
                   </div>
                 ))}

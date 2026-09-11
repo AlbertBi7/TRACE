@@ -19,7 +19,7 @@ function AppLayout() {
   return (
     <div className="flex h-screen bg-trace-bg overflow-hidden">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto">
+      <main className="min-h-0 flex-1 overflow-y-auto">
         <Outlet />
       </main>
     </div>
