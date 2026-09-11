@@ -117,31 +117,40 @@ async def get_node_detail(
     prov_ids = n.get("provenance_ids", [])
     provenance = []
     if prov_ids:
-        pool = await get_pool()
-        rows = await pool.fetch(
-            """SELECT e.id, e.snippet, e.page, e.paragraph, e.entity_type, e.extractor,
-                      e.confidence, e.value,
-                      d.filename, d.id AS document_id
-               FROM extraction_log e
-               JOIN documents d ON d.id = e.document_id
-               WHERE e.id = ANY($1::uuid[])""",
-            prov_ids,
-        )
-        provenance = [
-            {
-                "provenance_id": str(r["id"]),
-                "document_id": str(r["document_id"]),
-                "filename": r["filename"],
-                "page": r["page"],
-                "paragraph": r["paragraph"],
-                "snippet": r["snippet"],
-                "entity_type": r["entity_type"],
-                "extractor": r["extractor"],
-                "confidence": r["confidence"],
-                "value": r["value"],
-            }
-            for r in rows
-        ]
+        import uuid as _uuid
+        valid_ids = []
+        for pid in prov_ids:
+            try:
+                _uuid.UUID(str(pid))
+                valid_ids.append(pid)
+            except (ValueError, AttributeError):
+                continue
+        if valid_ids:
+            pool = await get_pool()
+            rows = await pool.fetch(
+                """SELECT e.id, e.snippet, e.page, e.paragraph, e.entity_type, e.extractor,
+                          e.confidence, e.value,
+                          d.filename, d.id AS document_id
+                   FROM extraction_log e
+                   JOIN documents d ON d.id = e.document_id
+                   WHERE e.id = ANY($1::uuid[])""",
+                valid_ids,
+            )
+            provenance = [
+                {
+                    "provenance_id": str(r["id"]),
+                    "document_id": str(r["document_id"]),
+                    "filename": r["filename"],
+                    "page": r["page"],
+                    "paragraph": r["paragraph"],
+                    "snippet": r["snippet"],
+                    "entity_type": r["entity_type"],
+                    "extractor": r["extractor"],
+                    "confidence": r["confidence"],
+                    "value": r["value"],
+                }
+                for r in rows
+            ]
 
     # Edges touching this node — properties via properties(r) (see get_case_graph note)
     edge_recs = await run_cypher(
