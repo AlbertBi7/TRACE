@@ -81,7 +81,7 @@ services:
         cat /neo4j-init/constraints.cypher | cypher-shell -a neo4j:7687 -u neo4j -p '${NEO4J_PASSWORD}' --format plain
         if [ "${TRACE_RESEED_DEMO}" = "true" ]; then
           echo "TRACE neo4j-init: clearing previous demo case (idempotent reseed)..."
-          printf "MATCH (n) WHERE 'c0000000-0000-0000-0000-000000000001' IN n.case_ids DETACH DELETE n;\n" | cypher-shell -a neo4j:7687 -u neo4j -p '${NEO4J_PASSWORD}' --format plain
+          printf "MATCH (n:Entity) WHERE 'c0000000-0000-0000-0000-000000000001' IN n.case_ids SET n.case_ids = [c IN n.case_ids WHERE c <> 'c0000000-0000-0000-0000-000000000001'] WITH n WHERE size(n.case_ids)=0 DETACH DELETE n;\nMATCH ()-[r:LINKED]->() WHERE 'c0000000-0000-0000-0000-000000000001' IN r.case_ids SET r.case_ids = [c IN r.case_ids WHERE c <> 'c0000000-0000-0000-0000-000000000001'] WITH r WHERE size(r.case_ids)=0 DELETE r;\n" | cypher-shell -a neo4j:7687 -u neo4j -p '${NEO4J_PASSWORD}' --format plain
           echo "TRACE neo4j-init: applying demo seed..."
           cat /neo4j-init/seed.cypher | cypher-shell -a neo4j:7687 -u neo4j -p '${NEO4J_PASSWORD}' --format plain
         else

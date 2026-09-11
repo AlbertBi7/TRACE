@@ -99,6 +99,38 @@ async def accept_merge(case_id: str, merge_id: str, current_user: dict = Depends
     return {"message": "Merge accepted"}
 
 
+@router.post("/{case_id}/resolution/merges/{merge_id}/dismiss")
+async def dismiss_merge(case_id: str, merge_id: str, current_user: dict = Depends(get_current_user)):
+    """Dismiss a suggested merge — marks as undone without ever affecting the graph."""
+    await require_case_access(case_id, current_user)
+    pool = await get_pool()
+
+    result = await pool.execute(
+        """UPDATE entity_merges
+           SET status = 'undone', decided_by = $1, decided_at = $2
+           WHERE id = $3 AND case_id = $4 AND status = 'suggested'""",
+        str(current_user["id"]),
+        datetime.now(timezone.utc),
+        uuid.UUID(merge_id) if _is_uuid(merge_id) else merge_id,
+        case_id,
+    )
+    if not result or not result.endswith("1"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Merge not found or not in suggested state")
+
+    await pool.execute(
+        """INSERT INTO audit_log (id, user_id, action, target_type, target_id, metadata, timestamp)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)""",
+        str(uuid.uuid4()),
+        str(current_user["id"]),
+        "MERGE_DISMISSED",
+        "entity_merge",
+        merge_id,
+        json.dumps({"case_id": case_id}),
+        datetime.now(timezone.utc),
+    )
+    return {"message": "Merge dismissed"}
+
+
 @router.post("/{case_id}/resolution/merges/{merge_id}/undo")
 async def undo_merge(case_id: str, merge_id: str, current_user: dict = Depends(get_current_user)):
     """Undo an accepted merge — restores 'suggested' history, audited."""

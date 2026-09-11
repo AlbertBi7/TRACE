@@ -245,40 +245,142 @@ export default function GraphExplorer() {
     );
   }, [graph, heuristics, typeFilter]);
 
-  // ─── Cytoscape lifecycle ──────────────────────────────────────────
+  // ─── Cytoscape lifecycle — robust against flex 0-height + hidden-tab 0x0 ─
+  // Research: Cytoscape.js blank when nested/flex (issues #2189, #1769, #2434) is fixed by
+  // explicit container size + cy.resize()+fit() after mount + ResizeObserver.
+  // Best smooth config 2026: Cytoscape (Canvas) for analysis (<1k nodes) — see PkgPulse 2026-06
+  // "Cytoscape for graph analysis, vis-network for diagrams, Sigma for WebGL large". TRACE is
+  // 10-40 nodes with algorithms, so Cytoscape remains optimal; use WebGL (Reagraph/Cosmograph)
+  // only if scaling to thousands.
   useEffect(() => {
-    if (!containerRef.current || filteredElements.length === 0) return;
+    const el = containerRef.current;
+    if (!el || !graph.nodes.length) return;
+    if (cyRef.current) return;
 
-    if (!cyRef.current) {
-      cyRef.current = cytoscape({
-        container: containerRef.current,
-        style: cyStyle(),
+    let destroyed = false;
+    const init = () => {
+      if (destroyed || !el || cyRef.current) return;
+      const { clientWidth: w, clientHeight: h } = el;
+      // Container still 0x0 (flex not laid out / hidden tab) — retry next frame
+      if (w === 0 || h === 0) {
+        requestAnimationFrame(init);
+        return;
+      }
+      try {
+        cyRef.current = cytoscape({
+          container: el,
+          style: cyStyle(),
+          elements: [],
+          wheelSensitivity: 0.25,
+          motionBlur: true,
+          boxSelectionEnabled: true,
+          autoungrabify: false,
+          autounselectify: false,
+        });
+        cyRef.current.on('tap', 'node', (evt) => {
+          setSelectedNode(evt.target.data());
+        });
+        window.__traceCy = cyRef.current;
+        // Immediately populate — second effect may not re-run if filteredElements unchanged
+        if (filteredElements.length) {
+          cyRef.current.json({ elements: filteredElements });
+          requestAnimationFrame(() => {
+            const c = cyRef.current;
+            if (!c) return;
+            c.resize();
+            const layout = c.layout({
+              name: layoutName,
+              animate: true,
+              animationDuration: 500,
+              fit: true,
+              padding: 50,
+              idealEdgeLength: 100,
+              nodeRepulsion: 9000,
+              eles: c.elements(),
+            });
+            layout.run();
+          });
+        }
+      } catch (e) {
+        console.error('[GraphExplorer] cytoscape init error', e);
+        return;
+      }
+      // Kick off first render via filteredElements effect
+      // Force immediate resize/fit so first paint isn't blank
+      requestAnimationFrame(() => {
+        if (cyRef.current) {
+          cyRef.current.resize();
+          cyRef.current.fit(undefined, 40);
+        }
       });
-      cyRef.current.on('tap', 'node', async (evt) => {
-        setSelectedNode(evt.target.data());
+    };
+
+    // Defer to next frame so flex layout has computed height
+    const raf = requestAnimationFrame(init);
+
+    // ResizeObserver handles window resize / flex changes (replaces manual cy.resize calls)
+    let ro;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => {
+        if (cyRef.current) {
+          cyRef.current.resize();
+        }
       });
-      // Test hook: canvas-rendered nodes can't be targeted by DOM selectors,
-      // so UI tests compute rendered positions via this handle.
-      window.__traceCy = cyRef.current;
+      ro.observe(el);
+    } else {
+      const onWinResize = () => cyRef.current?.resize();
+      window.addEventListener('resize', onWinResize);
+      ro = { disconnect: () => window.removeEventListener('resize', onWinResize) };
     }
+
+    return () => {
+      destroyed = true;
+      cancelAnimationFrame(raf);
+      if (ro?.disconnect) ro.disconnect();
+      if (cyRef.current) {
+        cyRef.current.destroy();
+        cyRef.current = null;
+      }
+      delete window.__traceCy;
+    };
+  }, [graph.nodes.length, loading]);
+
+  useEffect(() => {
     const cy = cyRef.current;
-    cy.elements().remove();
-    cy.add(filteredElements);
-    cy.layout({
-      name: layoutName,
-      animate: true,
-      animationDuration: 400,
-      idealEdgeLength: 90,
-      nodeRepulsion: 8000,
-      padding: 40,
-    }).run();
-
-    return () => {};
+    if (!cy) return;
+    // Use json batch for atomic update (faster + fewer reflows than remove+add)
+    cy.json({ elements: filteredElements });
+    // Ensure viewport knows new container size (flex may have changed)
+    const doLayout = () => {
+      if (!cyRef.current) return;
+      const c = cyRef.current;
+      c.resize();
+      if (filteredElements.length === 0) return;
+      const layout = c.layout({
+        name: layoutName,
+        animate: true,
+        animationDuration: 500,
+        animationEasing: 'ease-in-out-cubic',
+        fit: true,
+        padding: 50,
+        idealEdgeLength: 100,
+        nodeRepulsion: 9000,
+        nodeOverlap: 20,
+        componentSpacing: 50,
+        randomize: false,
+        // Smoothness: motionBlur already on, avoid blocking main thread
+        eles: c.elements(),
+      });
+      layout.one('layoutstop', () => {
+        c.resize();
+        c.fit(c.elements(), 50);
+      });
+      layout.run();
+    };
+    // Defer layout to after DOM paint so resize has correct bounds
+    const raf = requestAnimationFrame(doLayout);
+    return () => cancelAnimationFrame(raf);
   }, [filteredElements, layoutName]);
-
-  useEffect(() => () => {
-    if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null; }
-  }, []);
 
   // ─── Search focus ─────────────────────────────────────────────────
   const focusSearch = () => {
@@ -371,7 +473,7 @@ export default function GraphExplorer() {
     .sort((a, b) => a.label.localeCompare(b.label));
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex flex-col flex-1 min-h-0 h-full" style={{ minHeight: 0 }}>
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-trace-surface border-b border-trace-border">
         <div className="flex items-center gap-3">
@@ -457,8 +559,8 @@ export default function GraphExplorer() {
         </div>
       </div>
 
-      {/* Canvas */}
-      <div className="flex-1 relative bg-trace-bg">
+      {/* Canvas — explicit min-height + block style fixes 0x0 blank (cytoscape #2189) */}
+      <div className="flex-1 min-h-0 relative bg-trace-bg" style={{ minHeight: 520 }}>
         {loading ? (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="w-8 h-8 border-2 border-trace-primary border-t-transparent rounded-full animate-spin" />
@@ -478,7 +580,11 @@ export default function GraphExplorer() {
           </div>
         ) : (
           <>
-            <div ref={containerRef} className="absolute inset-0" />
+            <div
+              ref={containerRef}
+              className="absolute inset-0"
+              style={{ width: '100%', height: '100%', display: 'block' }}
+            />
             {/* Legend */}
             <div className="absolute bottom-3 left-3 glass rounded-lg px-3 py-2 flex flex-col gap-1 pointer-events-none">
               {Object.entries(ENTITY_COLORS).map(([t, c]) => (
@@ -529,3 +635,4 @@ export default function GraphExplorer() {
     </div>
   );
 }
+

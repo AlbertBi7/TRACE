@@ -175,7 +175,8 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
 
     for e in edges:
         await run_cypher(
-            """MATCH (a:Entity {entity_id: $h}), (b:Entity {entity_id: $t})
+            """MATCH (a:Entity {entity_id: $h})
+               MATCH (b:Entity {entity_id: $t})
                MERGE (a)-[r:LINKED {relation: $rel}]->(b)
                SET r.provenance_ids = $prov,
                    r.case_ids = $cases,
@@ -191,24 +192,32 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
     # ── Reconcile stale data: Postgres is the source of truth. Any node/edge
     # still carrying this case's membership but no longer supported by current
     # extraction data loses that membership (and is deleted if orphaned).
-    await run_cypher(
-        """MATCH (n:Entity)
-           WHERE $case IN n.case_ids AND NOT n.entity_id IN $keep
-           SET n.case_ids = [c IN n.case_ids WHERE c <> $case]
-           WITH n WHERE size(n.case_ids) = 0
-           DETACH DELETE n""",
-        {"case": case_id, "keep": list(nodes.keys())},
-    )
-    keep_keys = [f"{e['head']}|{e['relation']}|{e['tail']}" for e in edges]
-    await run_cypher(
-        """MATCH (a:Entity)-[r:LINKED]->(b:Entity)
-           WHERE $case IN r.case_ids
-             AND NOT (a.entity_id + '|' + r.relation + '|' + b.entity_id) IN $keep
-           SET r.case_ids = [c IN r.case_ids WHERE c <> $case]
-           WITH r WHERE size(r.case_ids) = 0
-           DELETE r""",
-        {"case": case_id, "keep": keep_keys},
-    )
+    # Keep is CASE-SCOPED: only nodes/edges that still have this case in their
+    # canonical membership should retain it. Using the global node set would
+    # incorrectly preserve a case membership that was removed from extraction.
+    if case_id:
+        case_keep_nodes = [gid for gid, n in nodes.items() if case_id in n["case_ids"]]
+        await run_cypher(
+            """MATCH (n:Entity)
+               WHERE $case IN n.case_ids AND NOT n.entity_id IN $keep
+               SET n.case_ids = [c IN n.case_ids WHERE c <> $case]
+               WITH n WHERE size(n.case_ids) = 0
+               DETACH DELETE n""",
+            {"case": case_id, "keep": case_keep_nodes},
+        )
+        case_keep_keys = [
+            f"{e['head']}|{e['relation']}|{e['tail']}"
+            for e in edges if case_id in e["case_ids"]
+        ]
+        await run_cypher(
+            """MATCH (a:Entity)-[r:LINKED]->(b:Entity)
+               WHERE $case IN r.case_ids
+                 AND NOT (a.entity_id + '|' + r.relation + '|' + b.entity_id) IN $keep
+               SET r.case_ids = [c IN r.case_ids WHERE c <> $case]
+               WITH r WHERE size(r.case_ids) = 0
+               DELETE r""",
+            {"case": case_id, "keep": case_keep_keys},
+        )
 
     n_groups = len({canon_parent.get(k, k) for k in canon_parent})
     logger.info(f"Graph sync complete: {len(nodes)} nodes, {len(edges)} edges, {n_groups} canonical groups")
