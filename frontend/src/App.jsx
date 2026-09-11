@@ -11,6 +11,7 @@ import LoginPage from './auth/LoginPage';
 import CaseListPage from './dashboard/CaseListPage';
 import CaseDetailPage from './dashboard/CaseDetailPage';
 import GraphExplorer from './dashboard/GraphExplorer';
+import CaseNetwork from './dashboard/CaseNetwork';
 import UserManagement from './admin/UserManagement';
 import AuditLog from './admin/AuditLog';
 import CaseOverview from './admin/CaseOverview';
@@ -66,6 +67,7 @@ function App() {
             <Route path="/dashboard/cases" element={<CaseListPage />} />
             <Route path="/dashboard/cases/:caseId" element={<CaseDetailPage />} />
             <Route path="/dashboard/cases/:caseId/graph" element={<GraphExplorer />} />
+            <Route path="/dashboard/case-network" element={<CaseNetwork />} />
           </Route>
 
           {/* Admin Routes */}
