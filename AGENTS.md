@@ -4,11 +4,11 @@
 Single FastAPI + React network-analysis app. PostgreSQL is source of truth (users/cases/docs/`extraction_log`/`entity_merges`/audit/`schema_migrations`); Neo4j is derived rebuildable graph (`:Entity` + `:LINKED`, always with `provenance_ids`+`case_ids`). No microservices, no GNNs.
 
 ## Layout
-- `services/api/` — FastAPI `app/main.py` (lifespan: pg + neo4j + `migrate.py` + demo seed). Routers: `app/routers/` (`cases`, `documents`, `extraction`, `resolution`, `graph`, `analysis`, `chat`, `audit`, `users`, `case_network`). Core: `app/nlp/` (regex+spaCy+scoped LLM fallback), `app/graph/` (`service.py` sync/canonicalization, `heuristics.py`, `priority.py`, `analysis.py`), `app/auth/`, `app/db/` (`migrate.py`, `postgres.py`, `neo4j_driver.py`). Mounted at `/app` with `--reload` in compose.
+- `services/api/` — FastAPI `app/main.py` (lifespan: pg + neo4j + `migrate.py` + demo seed). Routers: `app/routers/` (`cases`, `documents`, `extraction`, `resolution`, `graph`, `analysis`, `case_network`, `chat`, `audit`, `users`). Core: `app/nlp/` (regex+spaCy+scoped LLM fallback), `app/graph/` (`service.py` sync/canonicalization, `heuristics.py`, `priority.py`, `analysis.py` + `deep.py`), `app/auth/`, `app/db/` (`migrate.py`, `postgres.py`, `neo4j_driver.py`). Mounted at `/app` with `--reload` in compose.
 - `frontend/` — React 19 + Vite + Tailwind v4 (`@tailwindcss/vite`) + Cytoscape.js. Docker: `node:20-alpine` build → `nginx:1.27-alpine` (`nginx.conf` proxies `/api/` with SSE passthrough). Dev outside Docker: `vite.config.js` proxies `/api` → `localhost:8000`.
 - `db/postgres/migrations/` — `001_init.sql` via Postgres `docker-entrypoint-initdb.d` mount; `002-004` via API `app/db/migrate.py` on boot (tracked in `schema_migrations`). Don't expect 002+ in init volume.
-- `db/neo4j/` — `constraints.cypher` (always, idempotent) + `seed.cypher` (MERGE demo case `c0000000-...0001`).
-- `infra/` — `docker-compose.yml` (executable truth) + `docker-compose.local.yml` (port overrides `5433`/`7475`/`7688` to avoid conflicts) + `.env` (gitignored, create from `.env.example`). Services: `trace-postgres:5432`, `trace-neo4j:7474/7687`, `trace-api:8000`, `trace-frontend:5173`, one-shot `trace-neo4j-init`.
+- `db/neo4j/` — `constraints.cypher` (always, idempotent — unique on `Entity.entity_id`) + `seed.cypher` (MERGE demo case `c0000000-...0001`).
+- `infra/` — `docker-compose.yml` (executable truth; must run `docker compose` from this dir) + `docker-compose.local.yml` (port overrides `5433`/`7475`/`7688`) + `.env` (gitignored, create from `.env.example`). Services: `trace-postgres:5432`, `trace-neo4j:7474/7687`, `trace-api:8000`, `trace-frontend:5173`, one-shot `trace-neo4j-init` (waits for `neo4j:service_healthy`).
 - Handoff docs: `README.md`, `SETUP_PROMPT.md`, `BUILD_AUDIT.md`, `NOT_VERIFIED.md`, `docs/` — read before changing code.
 
 ## Setup & Run
@@ -20,11 +20,11 @@ docker compose logs -f api          # also: docker compose logs neo4j-init
 docker compose down                 # fresh DBs: docker compose down -v  (deletes pg-data/neo4j-data)
 ```
 - Ports (default): frontend `5173`, API `8000` (`/api/health`), Neo4j `7474`/`7687`, Postgres `5432`. Alt via `docker compose -f docker-compose.yml -f docker-compose.local.yml up`.
-- Demo creds seeded idempotently on API boot (`app/main.py:42`): `admin@trace.dev` / `TraceAdmin123!`, `investigator@trace.dev` / `TraceInvestigator123!`. `EmailStr` rejects `.local` — use `.dev`.
+- Demo creds seeded idempotently on API boot (`app/main.py:50`): `admin@trace.dev` / `TraceAdmin123!`, `investigator@trace.dev` / `TraceInvestigator123!`. `EmailStr` rejects `.local` — use `.dev`.
 - `TRACE_RESEED_DEMO` (default `true`): `true` clears & re-MERGEs only demo case `c0000000-...0001`; `false` skips seed and preserves graph (use for persistent data).
 - API hot-reloads via volume mount; `db/postgres/migrations` is `ro`. Frontend needs rebuild unless `npm run dev` outside Docker.
 
-## Tests — live stack required
+## Tests — live stack required (except unit)
 ```bash
 docker exec trace-api python -m pytest /app/tests_e2e/unit -q
 docker exec trace-api python -m pytest /app/tests_e2e/unit/test_unit.py::test_transfer_between_accounts -q  # single test
@@ -44,10 +44,11 @@ npx playwright test                        # smoke at frontend/tests/smoke.spec.
 - No lint/typecheck/pre-commit; `requirements-dev.txt` is just `pytest`.
 
 ## Gotchas
+- `docker compose` must run from `infra/` — compose file uses `../` relative paths.
 - Migrations split: `001` via Postgres init; `002-004` via `app/db/migrate.py`. Both idempotent.
-- Neo4j healthcheck generous (`start_period:90s`, `timeout:30s`, `retries:30`); `neo4j-init` waits for `service_healthy`.
-- spaCy model (`SPACY_MODEL=en_core_web_sm`) downloads at image build (`services/api/Dockerfile:14`); offline build warns, runtime degrades to regex-only (`app/nlp/spacy_model.py`).
-- PyPDF2 has no OCR — scanned PDFs return `422` with explicit error; provide text-layer PDFs.
+- Neo4j healthcheck generous (`start_period:90s`, `timeout:30s`, `retries:30`); `neo4j-init` waits for `service_healthy`. Don't hit API until `ps` shows healthy.
+- spaCy model (`SPACY_MODEL=en_core_web_sm`) downloads at image build (`services/api/Dockerfile:18`); offline build warns, runtime degrades to regex-only (`app/nlp/spacy_model.py`).
+- PyPDF2 has no OCR — scanned PDFs return `422` with explicit error; provide text-layer PDFs. Upload limit 50 MB, types `pdf`/`txt`/`csv`/`json` (`app/routers/documents.py`).
 - Entity IDs deterministic SHA-1 of `(type, canonical value)` (`app/graph/service.py:_global_entity_id`); merges use union-find with lexicographic root (`build_canonicalization`), longest-alias wins for display.
 - Graph sync (`POST /api/cases/{id}/graph/sync`) is idempotent, global read + case-scoped reconciliation; rerun after merges. Neo4j `:Entity` unique on `entity_id` (not per-type labels).
 - Uploads: raw files on disk volume (`/uploads` as `caseId_docId_filename`), normalized `extracted_text` + `parsed_content` (pages→paragraphs) in Postgres for provenance.
