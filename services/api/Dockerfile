@@ -1,8 +1,9 @@
 FROM python:3.11-slim
 
-# System deps for bcrypt and asyncpg
+# System deps for bcrypt/asyncpg + OCR (tesseract + poppler for pdf2image)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev \
+    tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

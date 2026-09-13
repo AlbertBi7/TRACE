@@ -1,0 +1,10 @@
+[
+  {"name": "Georgekutty Joseph", "phone": "98472-55667", "role": "cable tv operator and family patriarch", "address": "Rajakkad"},
+  {"name": "Rani George", "phone": "98473-77889", "role": "homemaker present during altercation", "address": "Rajakkad"},
+  {"name": "Anju George", "phone": "98471-33445", "role": "elder daughter and student", "address": "Rajakkad"},
+  {"name": "Anu George", "phone": "", "role": "younger daughter present during altercation", "address": "Rajakkad"},
+  {"name": "Varun Prabhakar", "phone": "98470-11223", "role": "missing person who blackmailed Anju", "vehicle": "KL-39-C-1934"},
+  {"name": "Geetha Prabhakar", "phone": "98474-99001", "role": "inspector general of police and victim mother", "address": "Rajakkad"},
+  {"name": "Sahadevan", "phone": "98475-12340", "role": "local police constable and field investigator", "vehicle": "KL-05-P-2210"},
+  {"name": "Monichan", "phone": "98476-44556", "role": "family aide who coordinates cover story", "address": "Kochi"}
+]

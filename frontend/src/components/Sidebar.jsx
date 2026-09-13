@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   FolderOpen,
   Network,
+  GitBranch,
   Users,
   ScrollText,
   ChevronLeft,
@@ -23,6 +24,7 @@ import {
 const investigatorLinks = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/dashboard/cases', icon: FolderOpen, label: 'Cases' },
+  { to: '/dashboard/case-network', icon: GitBranch, label: 'Case Network' },
 ];
 
 const adminLinks = [
@@ -30,6 +32,7 @@ const adminLinks = [
   { to: '/admin/users', icon: Users, label: 'User Management' },
   { to: '/admin/cases', icon: FolderOpen, label: 'All Cases' },
   { to: '/admin/audit', icon: ScrollText, label: 'Audit Log' },
+  { to: '/dashboard/case-network', icon: GitBranch, label: 'Case Network' },
 ];
 
 export default function Sidebar() {

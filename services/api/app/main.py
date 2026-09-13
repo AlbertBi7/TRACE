@@ -129,6 +129,7 @@ from app.routers.extraction import router as extraction_router
 from app.routers.resolution import router as resolution_router
 from app.routers.graph import router as graph_router
 from app.routers.analysis import router as analysis_router
+from app.routers.case_network import router as case_network_router
 from app.routers.chat import router as chat_router
 from app.routers.audit import router as audit_router
 
@@ -140,6 +141,7 @@ app.include_router(extraction_router)
 app.include_router(resolution_router)
 app.include_router(graph_router)
 app.include_router(analysis_router)
+app.include_router(case_network_router)
 app.include_router(chat_router)
 app.include_router(audit_router)
 

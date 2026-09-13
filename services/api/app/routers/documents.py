@@ -19,7 +19,7 @@ from app.config import settings
 
 router = APIRouter(prefix="/api/cases", tags=["documents"])
 
-ALLOWED_EXTENSIONS = {"pdf", "txt", "csv", "json"}
+ALLOWED_EXTENSIONS = {"pdf", "txt", "csv", "json", "png", "jpg", "jpeg"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
@@ -100,23 +100,46 @@ async def upload_document(
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File exceeds 50MB limit")
 
-    # Parse into paragraph-anchored content
+    # Parse into paragraph-anchored content (OCR fallback for scanned PDFs/images is inside parsers.py)
+    is_ocr = False
     try:
         full_text, pages = parse_document(ext, data, filename)
+        # Detect OCR usage via parser flag (scanned PDF or direct image)
+        try:
+            from app.ingestion.parsers import get_last_ocr_flag
+
+            is_ocr = get_last_ocr_flag()
+        except ImportError:
+            is_ocr = ext in {"png", "jpg", "jpeg"}
+        # Direct image types are always OCR
+        if ext in {"png", "jpg", "jpeg"}:
+            is_ocr = True
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Could not parse file — it may be corrupted")
 
-    # Honest failure for scanned/image-only PDFs: PyPDF2 reads text layers only,
-    # so such files parse to pages with zero paragraphs. Refuse them explicitly
-    # instead of silently ingesting a document nothing can ever be extracted
-    # from (OCR is out of scope — fail clearly, don't pretend it worked).
-    if ext == "pdf" and sum(len(p["paragraphs"]) for p in pages) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="PDF contains no extractable text — it may be a scanned/image-only document. OCR is not supported; provide a text-based PDF.",
-        )
+    # Honest failure for truly empty content: if both PyPDF2 and OCR (when
+    # applicable) yielded zero paragraphs, refuse explicitly. For scanned
+    # PDFs OCR now provides transcription, so this only fires when even OCR
+    # found no text (e.g., blank image).
+    if sum(len(p["paragraphs"]) for p in pages) == 0:
+        # Use same 422 but with updated detail that OCR was attempted
+        if ext == "pdf" and is_ocr:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="PDF contains no extractable text and OCR found no transcription — provide a clearer scan or text-based PDF.",
+            )
+        if ext == "pdf":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="PDF contains no extractable text — it may be a scanned/image-only document. OCR is not supported; provide a text-based PDF.",
+            )
+        if ext in {"png", "jpg", "jpeg"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Image contains no extractable text — OCR found no transcription. Provide a clearer image.",
+            )
 
     document_id = str(uuid.uuid4())
     storage_dir = settings.upload_dir
@@ -127,6 +150,12 @@ async def upload_document(
 
     now = datetime.now(timezone.utc)
     page_count = len(pages)
+
+    parsed_payload: dict = {"pages": pages}
+    if is_ocr:
+        parsed_payload["ocr"] = True
+        parsed_payload["ocr_lang"] = "eng+hin"
+        parsed_payload["ocr_source"] = "tesseract"
 
     await pool.execute(
         """INSERT INTO documents
@@ -141,7 +170,7 @@ async def upload_document(
         storage_path,
         full_text,
         page_count,
-        json.dumps({"pages": pages}),
+        json.dumps(parsed_payload),
     )
 
     await pool.execute(
@@ -152,7 +181,7 @@ async def upload_document(
         "DOCUMENT_UPLOADED",
         "document",
         document_id,
-        json.dumps({"filename": filename, "case_id": case_id, "bytes": len(data), "pages": page_count}),
+        json.dumps({"filename": filename, "case_id": case_id, "bytes": len(data), "pages": page_count, "ocr": is_ocr}),
         now,
     )
 

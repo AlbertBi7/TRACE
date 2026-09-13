@@ -14,8 +14,9 @@ import cytoscape from 'cytoscape';
 import api from '../lib/api';
 import NodeDrawer from './NodeDrawer';
 import AnalysisPanel from './AnalysisPanel';
+import DeepAnalysisPanel from './DeepAnalysisPanel';
 import {
-  ArrowLeft, Network, RefreshCw, Search, X, LayoutGrid, Circle, Scissors,
+  ArrowLeft, Network, RefreshCw, Search, X, LayoutGrid, Circle, Scissors, Layers,
 } from 'lucide-react';
 
 const ENTITY_COLORS = {
@@ -128,6 +129,16 @@ function cyStyle() {
       selector: 'node.faded, edge.faded',
       style: { opacity: 0.15 },
     },
+    {
+      selector: 'edge.bridge-highlight',
+      style: {
+        'line-style': 'dashed',
+        'line-color': '#ef4444',
+        'target-arrow-color': '#ef4444',
+        width: 2.5,
+        'z-index': 10,
+      },
+    },
   ];
 }
 
@@ -183,6 +194,7 @@ export default function GraphExplorer() {
   const [pathResult, setPathResult] = useState(null);
   const [articulationPoints, setArticulationPoints] = useState([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [deepOpen, setDeepOpen] = useState(false);
 
   const presentTypes = useMemo(
     () => [...new Set(graph.nodes.map((n) => n.entity_type))].sort(),
@@ -601,14 +613,26 @@ export default function GraphExplorer() {
           </>
         )}
 
-        {/* Simulator launcher */}
-        {!panelOpen && graph.nodes.length > 0 && (
-          <button
-            onClick={() => setPanelOpen(true)}
-            className="absolute top-3 right-3 btn-secondary py-1.5 px-3 text-xs flex items-center gap-1.5"
-          >
-            <Scissors className="w-3.5 h-3.5" /> Analyze
-          </button>
+        {/* Simulator + Deep launcher */}
+        {graph.nodes.length > 0 && (
+          <div className="absolute top-3 right-3 flex items-center gap-2 z-20">
+            {!deepOpen && (
+              <button
+                onClick={() => setDeepOpen(true)}
+                className="btn-secondary py-1.5 px-3 text-xs flex items-center gap-1.5"
+              >
+                <Layers className="w-3.5 h-3.5" /> Deep Analysis
+              </button>
+            )}
+            {!panelOpen && (
+              <button
+                onClick={() => setPanelOpen(true)}
+                className="btn-secondary py-1.5 px-3 text-xs flex items-center gap-1.5"
+              >
+                <Scissors className="w-3.5 h-3.5" /> Analyze
+              </button>
+            )}
+          </div>
         )}
 
         {selectedNode && (
@@ -629,6 +653,12 @@ export default function GraphExplorer() {
               onHighlightNodes={highlightFragmented}
               onClose={() => { setPanelOpen(false); clearHighlight(); }}
             />
+          </div>
+        )}
+
+        {deepOpen && (
+          <div className="absolute top-0 right-0 h-full z-30 flex">
+            <DeepAnalysisPanel caseId={caseId} cyRef={cyRef} nodes={graph.nodes} onClose={() => { setDeepOpen(false); clearHighlight(); cyRef.current?.nodes().removeStyle('background-color'); cyRef.current?.nodes().removeStyle('width'); cyRef.current?.nodes().removeStyle('height'); }} />
           </div>
         )}
       </div>
