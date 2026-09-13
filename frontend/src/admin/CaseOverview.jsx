@@ -51,18 +51,18 @@ export default function CaseOverview() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    if (deleteCode !== '24227') {
-      alert('Confirmation code must be 24227');
+    if (!deleteCode) {
+      alert('Confirmation code required');
       return;
     }
     setDeleting(true);
     try {
-      await api.delete(`/api/cases/${deleteTarget.id}?code=24227`, { headers: { 'X-Delete-Code': '24227' } });
+      await api.delete(`/api/cases/${deleteTarget.id}?code=${encodeURIComponent(deleteCode)}`, { headers: { 'X-Delete-Code': deleteCode } });
       setCases(prev => prev.filter(c => c.id !== deleteTarget.id));
       setDeleteTarget(null);
       setDeleteCode('');
     } catch (err) {
-      alert(err.response?.data?.detail || 'Delete failed — admin only / bad code');
+      alert(err.response?.data?.detail || 'Delete failed — check code / admin only');
     } finally {
       setDeleting(false);
     }
@@ -314,14 +314,13 @@ export default function CaseOverview() {
             <p className="text-sm text-trace-text-muted text-center mt-2">This will <span className="text-red-300 font-medium">permanently delete</span> <span className="text-white font-medium">“{deleteTarget.name}”</span> and all its documents, extractions, and graph data. Audited as <span className="font-mono text-xs">CASE_DELETED</span>. This cannot be undone.</p>
             <div className="mt-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-200">Postgres cascade + Neo4j orphan cleanup. Demo case <span className="font-mono">c000…0001</span> will be re-seeded on next restart if <span className="font-mono">TRACE_RESEED_DEMO=true</span>.</div>
             <div className="mt-4">
-              <label className="text-xs font-medium text-trace-text">Type <span className="font-mono text-red-300">24227</span> to confirm</label>
-              <input value={deleteCode} onChange={e=>setDeleteCode(e.target.value)} placeholder="24227" className="input-field mt-1 font-mono text-center tracking-widest" autoFocus />
-              {deleteCode && deleteCode !== '24227' && <p className="text-xs text-red-400 mt-1">Code must be 24227</p>}
-              {deleteCode === '24227' && <p className="text-xs text-emerald-400 mt-1">✓ Code confirmed</p>}
+              <label className="text-xs font-medium text-trace-text">Enter confirmation code</label>
+              <input value={deleteCode} onChange={e=>setDeleteCode(e.target.value)} placeholder="•••••" type="password" className="input-field mt-1 font-mono text-center tracking-widest" autoFocus />
+              {deleteCode && <p className="text-xs text-trace-text-dim mt-1">Code will be verified server-side</p>}
             </div>
             <div className="flex gap-3 mt-6">
               <button onClick={()=>{setDeleteTarget(null); setDeleteCode('');}} className="btn-secondary flex-1" disabled={deleting}>Cancel</button>
-              <button onClick={handleDelete} disabled={deleting || deleteCode !== '24227'} className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50">{deleting ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Trash2 className="w-4 h-4"/>} {deleting ? 'Deleting…' : 'Delete permanently'}</button>
+              <button onClick={handleDelete} disabled={deleting || !deleteCode} className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50">{deleting ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Trash2 className="w-4 h-4"/>} {deleting ? 'Deleting…' : 'Delete permanently'}</button>
             </div>
           </div>
         </div>

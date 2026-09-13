@@ -204,14 +204,14 @@ export default function CaseDetailPage() {
   };
 
   const handleDeleteCase = async () => {
-    if (deleteCodeDetail !== '24227') {
-      setActionError('Confirmation code must be 24227');
+    if (!deleteCodeDetail) {
+      setActionError('Confirmation code required');
       return;
     }
     setDeletingCase(true);
     setActionError('');
     try {
-      await api.delete(`/api/cases/${caseId}?code=24227`, { headers: { 'X-Delete-Code': '24227' } });
+      await api.delete(`/api/cases/${caseId}?code=${encodeURIComponent(deleteCodeDetail)}`, { headers: { 'X-Delete-Code': deleteCodeDetail } });
       navigate('/dashboard');
     } catch (err) {
       setActionError(err.response?.data?.detail || 'Delete failed — admin only / bad code');
@@ -445,14 +445,13 @@ export default function CaseDetailPage() {
             <h2 className="text-lg font-semibold text-trace-text text-center">Delete case permanently?</h2>
             <p className="text-sm text-trace-text-muted text-center mt-2">This will permanently delete <span className="text-white font-medium">“{caseData.name}”</span> and all its documents, extractions, and graph data. Audited as <span className="font-mono text-xs">CASE_DELETED</span>. Cannot be undone.</p>
             <div className="mt-4">
-              <label className="text-xs font-medium text-trace-text">Type <span className="font-mono text-red-300">24227</span> to confirm</label>
-              <input value={deleteCodeDetail} onChange={e=>setDeleteCodeDetail(e.target.value)} placeholder="24227" className="input-field mt-1 font-mono text-center tracking-widest" autoFocus />
-              {deleteCodeDetail && deleteCodeDetail !== '24227' && <p className="text-xs text-red-400 mt-1">Code must be 24227</p>}
-              {deleteCodeDetail === '24227' && <p className="text-xs text-emerald-400 mt-1">✓ Code confirmed</p>}
+              <label className="text-xs font-medium text-trace-text">Enter confirmation code</label>
+              <input value={deleteCodeDetail} onChange={e=>setDeleteCodeDetail(e.target.value)} placeholder="•••••" type="password" className="input-field mt-1 font-mono text-center tracking-widest" autoFocus />
+              {deleteCodeDetail && <p className="text-xs text-trace-text-dim mt-1">Code will be verified server-side</p>}
             </div>
             <div className="flex gap-3 mt-6">
               <button onClick={()=>{setShowDeleteConfirm(false); setDeleteCodeDetail('');}} className="btn-secondary flex-1" disabled={deletingCase}>Cancel</button>
-              <button onClick={handleDeleteCase} disabled={deletingCase || deleteCodeDetail !== '24227'} className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50">{deletingCase ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Trash2 className="w-4 h-4"/>} {deletingCase ? 'Deleting…' : 'Delete forever'}</button>
+              <button onClick={handleDeleteCase} disabled={deletingCase || !deleteCodeDetail} className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50">{deletingCase ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Trash2 className="w-4 h-4"/>} {deletingCase ? 'Deleting…' : 'Delete forever'}</button>
             </div>
           </div>
         </div>

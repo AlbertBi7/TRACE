@@ -216,10 +216,12 @@ async def delete_case(
     x_delete_code: str | None = Header(None, alias="X-Delete-Code"),
 ):
     """Delete a case and all its data. Admin only. Requires confirmation code 24227 via ?code=24227 or X-Delete-Code header."""
-    # Confirmation code gate — prevents accidental deletes
+    # Confirmation code gate — secret, prevents accidental deletes
     confirm = code or x_delete_code
+    if not confirm:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation code required")
     if confirm != "24227":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation code required: enter 24227 to delete")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confirmation code")
     pool = await get_pool()
     row = await pool.fetchrow("SELECT id, name FROM cases WHERE id = $1", case_id)
     if not row:
