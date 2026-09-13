@@ -39,6 +39,10 @@ export default function CaseDetailPage() {
   const [closing, setClosing] = useState(false);
   const [closureReport, setClosureReport] = useState(null);
   const [showClosure, setShowClosure] = useState(false);
+  const [selectedCulprits, setSelectedCulprits] = useState([]);
+  const [chargesInput, setChargesInput] = useState('');
+  const [closureNotes, setClosureNotes] = useState('');
+  const [suspectsForClosure, setSuspectsForClosure] = useState([]);
   const fileInputRef = useRef(null);
 
   const fetchCase = async () => {
@@ -118,6 +122,18 @@ export default function CaseDetailPage() {
     if (!caseData) return;
     const isOpen = caseData.status === 'open';
     if (isOpen) {
+      // Pre-load suspects for culprit selection
+      try {
+        const { data: graph } = await api.get(`/api/cases/${caseId}/graph`);
+        const suspects = (graph.nodes || []).filter(n => n.entity_type === 'PERSON');
+        setSuspectsForClosure(suspects);
+        // Pre-fill if case already had culprits (e.g., draft)
+        if (caseData.culprit_entity_ids?.length) setSelectedCulprits(caseData.culprit_entity_ids);
+        if (caseData.charges?.length) setChargesInput(caseData.charges.join('\n'));
+        if (caseData.closure_notes) setClosureNotes(caseData.closure_notes);
+      } catch {
+        setSuspectsForClosure([]);
+      }
       setShowCloseConfirm(true);
       return;
     }
@@ -139,18 +155,48 @@ export default function CaseDetailPage() {
     setClosing(true);
     setActionError('');
     try {
-      const { data: closed } = await api.patch(`/api/cases/${caseId}`, { status: 'closed' });
+      const charges = chargesInput.split('\n').map(s=>s.trim()).filter(Boolean);
+      // Fallback: also split by comma if single line contains commas
+      const finalCharges = charges.length === 1 && charges[0].includes(',') ? charges[0].split(',').map(s=>s.trim()).filter(Boolean) : charges;
+      const payload = {
+        status: 'closed',
+        culprit_entity_ids: selectedCulprits,
+        charges: finalCharges,
+        closure_notes: closureNotes.trim(),
+      };
+      const { data: closed } = await api.patch(`/api/cases/${caseId}`, payload);
       setCaseData(closed);
       setShowCloseConfirm(false);
       const report = await fetchClosureReport(closed);
+      // Overlay human-finalized data for immediate dossier view
+      report.finalCulprits = selectedCulprits;
+      report.finalCharges = finalCharges;
+      report.closureNotes = closureNotes.trim();
       setClosureReport(report);
       setShowClosure(true);
-      setActionNotice('Case closed — closure dossier generated.');
+      setActionNotice(`Case closed — ${selectedCulprits.length} culprit(s) finalized, ${finalCharges.length} charge(s) recorded.`);
+      // Reset form
+      setSelectedCulprits([]);
+      setChargesInput('');
+      setClosureNotes('');
     } catch (err) {
       setActionError(err.response?.data?.detail || 'Failed to close case');
-      setShowCloseConfirm(false);
+      // keep modal open for retry
     } finally {
       setClosing(false);
+    }
+  };
+
+  const handleViewDossier = async () => {
+    try {
+      const report = await fetchClosureReport(caseData);
+      report.finalCulprits = caseData.culprit_entity_ids || [];
+      report.finalCharges = caseData.charges || [];
+      report.closureNotes = caseData.closure_notes || "";
+      setClosureReport(report);
+      setShowClosure(true);
+    } catch (e) {
+      setActionError('Failed to load dossier');
     }
   };
 
@@ -267,9 +313,16 @@ export default function CaseDetailPage() {
             <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> Created {new Date(caseData.created_at).toLocaleDateString()}</span>
             {caseData.status === 'closed' && <span className="flex items-center gap-1 text-amber-300">· Closed dossier available</span>}
           </div>
+          {caseData.status === 'closed' && (caseData.culprit_entity_ids?.length || caseData.charges?.length || caseData.closure_notes) && (
+            <div className="mt-3 p-3 rounded-xl bg-gradient-to-r from-red-500/10 to-amber-500/10 border border-red-500/20 flex flex-wrap gap-3 text-xs">
+              {caseData.culprit_entity_ids?.length ? <span className="flex items-center gap-1.5"><ShieldAlert className="w-3 h-3 text-red-400"/> Culprit(s): <span className="font-medium text-red-200">{caseData.culprit_entity_ids.join(', ')}</span></span> : null}
+              {caseData.charges?.length ? <span className="flex items-center gap-1.5"><Scale className="w-3 h-3 text-amber-400"/> Charges: <span className="font-mono text-amber-200">{caseData.charges.join(' | ')}</span></span> : null}
+              {caseData.closure_notes ? <span className="text-trace-text-muted truncate max-w-[40ch]">“{caseData.closure_notes}”</span> : null}
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
           <button
             onClick={() => navigate(`/dashboard/cases/${caseId}/graph`)}
             className="btn-secondary flex items-center gap-2"
@@ -277,6 +330,11 @@ export default function CaseDetailPage() {
             <Network className="w-4 h-4" />
             Open Graph Explorer
           </button>
+          {!isOpen && (
+            <button onClick={handleViewDossier} className="btn-secondary flex items-center gap-2 border-amber-500/30 text-amber-300 hover:bg-amber-500/10">
+              <FileText className="w-4 h-4"/> View Dossier
+            </button>
+          )}
           <button
             onClick={handleCloseToggle}
             disabled={closing}
@@ -293,26 +351,63 @@ export default function CaseDetailPage() {
         </div>
       )}
 
-      {/* Close Confirm Modal */}
+      {/* Close Confirm Modal — finalize culprit & charges */}
       {showCloseConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="glass rounded-2xl p-6 w-full max-w-lg animate-slide-in-up">
-            <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center mx-auto mb-4"><ShieldAlert className="w-6 h-6 text-amber-400"/></div>
-            <h2 className="text-lg font-semibold text-trace-text text-center">Close case — generate closure dossier?</h2>
-            <p className="text-sm text-trace-text-muted text-center mt-2">This will lock the case (<span className="text-trace-text font-medium">{caseData.name}</span>) and generate a full dossier with suspects, charges, evidence, and necessary handover artifacts. You can reopen later.</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="glass rounded-2xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto animate-slide-in-up">
+            <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center mx-auto mb-3"><ShieldAlert className="w-6 h-6 text-amber-400"/></div>
+            <h2 className="text-lg font-semibold text-trace-text text-center">Finalize closure — who is the culprit?</h2>
+            <p className="text-sm text-trace-text-muted text-center mt-1">Lock <span className="text-trace-text font-medium">{caseData.name}</span> and attest culprit(s) + charges. Human decision, system records it. Reopenable.</p>
+
+            {/* Culprit selector */}
+            <div className="mt-5">
+              <label className="text-xs font-semibold text-trace-text uppercase tracking-wider flex items-center gap-1.5"><Users className="w-3.5 h-3.5 text-violet-400"/> Finalized Culprit(s) — select from graph PERSONs</label>
+              <p className="text-[11px] text-trace-text-dim mt-1">Tick the person(s) you are finalizing as culprit. Leave empty if under investigation. This is attestation, not auto-inference.</p>
+              <div className="mt-2 card p-3 max-h-36 overflow-y-auto">
+                {suspectsForClosure.length ? (
+                  <div className="space-y-1.5">
+                    {suspectsForClosure.map(s=>(
+                      <label key={s.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-trace-surface-3 cursor-pointer border border-transparent has-[input:checked]:border-violet-500/30 has-[input:checked]:bg-violet-500/10">
+                        <input type="checkbox" checked={selectedCulprits.includes(s.id)} onChange={e=>{
+                          setSelectedCulprits(prev=> e.target.checked ? [...prev, s.id] : prev.filter(id=>id!==s.id));
+                        }} className="rounded text-violet-600"/>
+                        <span className="text-sm font-medium text-trace-text flex-1 truncate">{s.label}</span>
+                        <span className="text-[11px] text-trace-text-dim truncate max-w-[14ch]">{(s.aliases||[]).slice(0,2).join(', ')}</span>
+                        {s.case_ids?.length>1 && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300">multi</span>}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-trace-text-dim text-center py-2">No PERSON entities yet — run extraction & <span className="text-trace-text">Sync graph</span> first. You can still close with charges only.</p>
+                )}
+              </div>
+              {selectedCulprits.length >0 && <p className="text-xs text-violet-300 mt-1">{selectedCulprits.length} selected — will be recorded as finalized culprit(s).</p>}
+            </div>
+
+            {/* Charges */}
+            <div className="mt-4">
+              <label className="text-xs font-semibold text-trace-text uppercase tracking-wider flex items-center gap-1.5"><Scale className="w-3.5 h-3.5 text-amber-400"/> Charges to file</label>
+              <p className="text-[11px] text-trace-text-dim mt-1">One per line, e.g., <span className="font-mono text-trace-text">IPC 302 - Murder</span>, <span className="font-mono text-trace-text">IPC 201 - Causing disappearance of evidence</span></p>
+              <textarea value={chargesInput} onChange={e=>setChargesInput(e.target.value)} rows={3} placeholder={"IPC 302 - Murder\nIPC 201 - Destruction of evidence\nIPC 120B - Criminal conspiracy"} className="input-field w-full mt-2 text-sm font-mono"/>
+              {chargesInput.trim() && <p className="text-xs text-amber-300 mt-1">{chargesInput.split('\n').filter(Boolean).length} charge(s) will be filed.</p>}
+            </div>
+
+            {/* Closure notes */}
+            <div className="mt-4">
+              <label className="text-xs font-semibold text-trace-text uppercase tracking-wider">Closure notes (handover)</label>
+              <textarea value={closureNotes} onChange={e=>setClosureNotes(e.target.value)} rows={2} placeholder="Investigating officer remarks, chain-of-custody, next court date..." className="input-field w-full mt-2 text-sm"/>
+            </div>
+
             <div className="mt-4 p-3 rounded-xl bg-trace-surface-2 border border-trace-border text-xs text-trace-text-dim">
-              <p className="font-medium text-trace-text mb-1">Dossier will include:</p>
-              <ul className="list-disc list-inside space-y-1">
-                <li>Suspect roster (all PERSON entities, aliases, cross-case flags, provenance counts)</li>
-                <li>Charges & evidentiary links (relations by type: CALLED, TRANSFERRED_TO, TRAVELLED_WITH, ASSOCIATED_WITH)</li>
-                <li>Evidence inventory — {documents.length} documents, page/para provenance</li>
-                <li>Network metrics — nodes/edges, articulation points, top priority scores</li>
-                <li>Assigned team & audit trail + handover checklist</li>
+              <p className="font-medium text-trace-text mb-1">Dossier will also include:</p>
+              <ul className="list-disc list-inside space-y-0.5">
+                <li>Full suspect roster, evidence inventory ({documents.length} docs), network metrics, priority & heuristic leads</li>
+                <li>Provenance for every name/edge (file/page/para) — Postgres source of truth, Neo4j rebuildable</li>
               </ul>
             </div>
             <div className="flex gap-3 mt-6">
               <button onClick={()=>setShowCloseConfirm(false)} className="btn-secondary flex-1" disabled={closing}>Cancel</button>
-              <button onClick={confirmClose} disabled={closing} className="btn-primary flex-1 bg-amber-600 hover:bg-amber-500 flex items-center justify-center gap-2">{closing ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Lock className="w-4 h-4"/>} {closing ? 'Closing...' : 'Confirm & Close'}</button>
+              <button onClick={confirmClose} disabled={closing} className="btn-primary flex-1 bg-amber-600 hover:bg-amber-500 flex items-center justify-center gap-2">{closing ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Lock className="w-4 h-4"/>} {closing ? 'Closing...' : `Close & File${selectedCulprits.length ? ` (${selectedCulprits.length})` : ''}`}</button>
             </div>
           </div>
         </div>
@@ -340,6 +435,37 @@ export default function CaseDetailPage() {
                 <div className="p-3 rounded-xl bg-trace-surface-2 border border-trace-border"><p className="text-[11px] text-trace-text-dim uppercase">Entities</p><p className="text-sm font-bold text-trace-text">{closureReport.graph.nodes?.length ?? 0} nodes</p></div>
                 <div className="p-3 rounded-xl bg-trace-surface-2 border border-trace-border"><p className="text-[11px] text-trace-text-dim uppercase">Links</p><p className="text-sm font-bold text-trace-text">{closureReport.graph.edges?.length ?? 0} edges</p></div>
               </div>
+
+              {/* Finalized Culprits & Charges — human attestation */}
+              {(closureReport.case.culprit_entity_ids?.length || closureReport.finalCulprits?.length || closureReport.case.charges?.length || closureReport.finalCharges?.length || closureReport.closureNotes || closureReport.case.closure_notes) && (
+                <div className="p-4 rounded-xl bg-gradient-to-r from-red-500/15 via-amber-500/15 to-violet-500/15 border border-amber-500/30">
+                  <h3 className="text-sm font-bold text-trace-text flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-red-400"/> Finalized Attestation — Culprit(s) & Charges Filed</h3>
+                  <p className="text-xs text-trace-text-muted mt-1">Human-finalized at closure — not auto-inferred. Recorded by {closureReport.case.closed_by?.slice(0,8) || 'investigator'} on {new Date(closureReport.case.closed_at || closureReport.generatedAt).toLocaleString()}.</p>
+                  <div className="mt-3 grid md:grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-trace-text uppercase">Culprit(s)</p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {(closureReport.finalCulprits?.length ? closureReport.finalCulprits : closureReport.case.culprit_entity_ids || []).map(id=>{
+                          const node = (closureReport.graph.nodes||[]).find(n=>n.id===id);
+                          const label = node?.label || id;
+                          return <span key={id} className="px-3 py-1.5 rounded-full bg-red-500/20 text-red-200 border border-red-500/30 text-sm font-medium">{label}</span>
+                        })}
+                        {!((closureReport.finalCulprits?.length) || (closureReport.case.culprit_entity_ids?.length)) && <span className="text-xs text-trace-text-dim">No culprit finalized — under investigation.</span>}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-trace-text uppercase">Charges Filed</p>
+                      <ul className="mt-1 space-y-1">
+                        {(closureReport.finalCharges?.length ? closureReport.finalCharges : closureReport.case.charges || []).map((c,i)=>(
+                          <li key={i} className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-200 font-mono">{c}</li>
+                        ))}
+                        {!((closureReport.finalCharges?.length) || (closureReport.case.charges?.length)) && <li className="text-xs text-trace-text-dim">No charges listed.</li>}
+                      </ul>
+                    </div>
+                  </div>
+                  {(closureReport.closureNotes || closureReport.case.closure_notes) && <p className="text-xs text-trace-text-muted mt-3 p-2.5 rounded-lg bg-trace-surface-2 border border-trace-border"><span className="font-medium text-trace-text">Notes:</span> {closureReport.closureNotes || closureReport.case.closure_notes}</p>}
+                </div>
+              )}
 
               {/* Suspects */}
               <div>

@@ -66,6 +66,9 @@ class CaseUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = None
+    culprit_entity_ids: Optional[list[str]] = None
+    charges: Optional[list[str]] = None
+    closure_notes: Optional[str] = None
 
 
 class CaseOut(BaseModel):
@@ -75,6 +78,11 @@ class CaseOut(BaseModel):
     created_by: str
     created_at: datetime
     status: str
+    culprit_entity_ids: list[str] = []
+    charges: list[str] = []
+    closure_notes: str = ""
+    closed_at: Optional[datetime] = None
+    closed_by: Optional[str] = None
 
 
 class CaseAssignment(BaseModel):
