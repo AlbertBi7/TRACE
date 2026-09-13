@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import {
   FolderOpen, Clock, Users, Plus, X, Activity, Shield, FileText, Network,
-  TrendingUp, AlertTriangle, CheckCircle2, Archive, Zap, Eye, GitBranch, Layers
+  TrendingUp, AlertTriangle, CheckCircle2, Archive, Zap, Eye, GitBranch, Layers, Trash2
 } from 'lucide-react';
 
 export default function CaseOverview() {
@@ -20,6 +20,8 @@ export default function CaseOverview() {
   const [loading, setLoading] = useState(true);
   const [assignModal, setAssignModal] = useState(null);
   const [selectedUser, setSelectedUser] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   const [health, setHealth] = useState(null);
   const navigate = useNavigate();
 
@@ -44,6 +46,20 @@ export default function CaseOverview() {
       const { data } = await api.get('/api/cases');
       setCases(data);
     } catch (err) { alert(err.response?.data?.detail || 'Failed to assign'); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/api/cases/${deleteTarget.id}`);
+      setCases(prev => prev.filter(c => c.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Delete failed — admin only');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const stats = useMemo(() => {
@@ -230,6 +246,7 @@ export default function CaseOverview() {
                   {statusBadge(c.status)}
                   <button onClick={()=>setAssignModal(c.id)} className="btn-secondary py-1 px-2 text-xs"><Users className="w-3 h-3"/></button>
                   <button onClick={()=>navigate(`/dashboard/cases/${c.id}`)} className="btn-ghost p-1.5"><Eye className="w-4 h-4 text-trace-text-dim"/></button>
+                  <button onClick={()=>setDeleteTarget(c)} title="Delete case (admin)" className="p-1.5 rounded-lg hover:bg-red-500/10 text-trace-text-dim hover:text-red-400 transition-colors"><Trash2 className="w-3.5 h-3.5"/></button>
                 </div>
               </div>
             ))}
@@ -282,6 +299,22 @@ export default function CaseOverview() {
         </div>
       )}
 
+      {/* Delete Confirm */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="glass rounded-2xl p-6 w-full max-w-md animate-slide-in-up border border-red-500/20">
+            <div className="w-12 h-12 rounded-full bg-red-500/15 flex items-center justify-center mx-auto mb-4"><Trash2 className="w-6 h-6 text-red-400"/></div>
+            <h2 className="text-lg font-semibold text-trace-text text-center">Delete case?</h2>
+            <p className="text-sm text-trace-text-muted text-center mt-2">This will <span className="text-red-300 font-medium">permanently delete</span> <span className="text-white font-medium">“{deleteTarget.name}”</span> and all its documents, extractions, and graph data. Audited as <span className="font-mono text-xs">CASE_DELETED</span>. This cannot be undone.</p>
+            <div className="mt-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-200">Postgres cascade + Neo4j orphan cleanup. Demo case <span className="font-mono">c000…0001</span> will be re-seeded on next restart if <span className="font-mono">TRACE_RESEED_DEMO=true</span>.</div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={()=>setDeleteTarget(null)} className="btn-secondary flex-1" disabled={deleting}>Cancel</button>
+              <button onClick={handleDelete} disabled={deleting} className="flex-1 bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50">{deleting ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Trash2 className="w-4 h-4"/>} {deleting ? 'Deleting…' : 'Delete permanently'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Cases Table (kept for power users) */}
       <div className="card overflow-hidden p-0">
         <div className="px-4 py-3 border-b border-trace-border flex items-center justify-between">
@@ -314,6 +347,7 @@ export default function CaseOverview() {
                       <Users className="w-3 h-3" /> Assign
                     </button>
                     <button onClick={()=>navigate(`/dashboard/cases/${c.id}`)} className="p-1.5 rounded-lg hover:bg-trace-surface-3 text-trace-text-dim hover:text-trace-text"><Eye className="w-4 h-4"/></button>
+                    <button onClick={()=>setDeleteTarget(c)} title="Delete case" className="p-1.5 rounded-lg hover:bg-red-500/10 text-trace-text-dim hover:text-red-400 transition-colors"><Trash2 className="w-4 h-4"/></button>
                   </div>
                 </td>
               </tr>

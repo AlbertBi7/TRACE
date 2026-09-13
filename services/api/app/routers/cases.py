@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from app.auth.models import CaseCreate, CaseUpdate, CaseOut, CaseAssignment
 from app.auth.dependencies import get_current_user, require_role, require_case_access
 from app.db.postgres import get_pool
+from app.db.neo4j_driver import run_cypher
 from datetime import datetime, timezone
 import uuid
 import json
@@ -205,6 +206,49 @@ async def update_case(case_id: str, body: CaseUpdate, current_user: dict = Depen
         case_id,
     )
     return _case_out_from_row(updated)
+
+
+@router.delete("/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_case(case_id: str, current_user: dict = Depends(require_role("admin"))):
+    """Delete a case and all its data. Admin only. Hard delete with Postgres cascade + Neo4j reconciliation."""
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT id, name FROM cases WHERE id = $1", case_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
+    # Protect the demo seed case from accidental deletion via UI? Allow but audit.
+    # Postgres cascade: case_assignments, documents (→ extraction_log), entity_merges
+    await pool.execute("DELETE FROM cases WHERE id = $1", case_id)
+    # Neo4j: strip case membership, delete orphan nodes/edges
+    try:
+        await run_cypher(
+            """MATCH (n:Entity) WHERE $case IN n.case_ids
+               SET n.case_ids = [c IN n.case_ids WHERE c <> $case]
+               WITH n WHERE size(n.case_ids) = 0 DETACH DELETE n""",
+            {"case": case_id},
+        )
+        await run_cypher(
+            """MATCH ()-[r:LINKED]->() WHERE $case IN r.case_ids
+               SET r.case_ids = [c IN r.case_ids WHERE c <> $case]
+               WITH r WHERE size(r.case_ids) = 0 DELETE r""",
+            {"case": case_id},
+        )
+    except Exception as e:
+        # Postgres is source of truth; Neo4j failure is non-fatal but logged
+        import logging
+        logging.getLogger("trace.cases").warning(f"Neo4j cleanup failed for deleted case {case_id}: {e}")
+    # Audit
+    await pool.execute(
+        """INSERT INTO audit_log (id, user_id, action, target_type, target_id, metadata, timestamp)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)""",
+        str(uuid.uuid4()),
+        str(current_user["id"]),
+        "CASE_DELETED",
+        "case",
+        case_id,
+        json.dumps({"name": row["name"]}),
+        datetime.now(timezone.utc),
+    )
+    return None
 
 
 @router.post("/{case_id}/assign")

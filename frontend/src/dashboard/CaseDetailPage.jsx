@@ -9,7 +9,7 @@ import api from '../lib/api';
 import {
   ArrowLeft, FileText, Upload, Network, Users, Clock,
   ChevronRight, File, FileSpreadsheet, FileJson, GitMerge,
-  Lock, Unlock, Scale, ShieldAlert, Search, AlertTriangle, CheckCircle2, X
+  Lock, Unlock, Scale, ShieldAlert, Search, AlertTriangle, CheckCircle2, X, Trash2
 } from 'lucide-react';
 
 const fileIcons = {
@@ -43,6 +43,8 @@ export default function CaseDetailPage() {
   const [chargesInput, setChargesInput] = useState('');
   const [closureNotes, setClosureNotes] = useState('');
   const [suspectsForClosure, setSuspectsForClosure] = useState([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingCase, setDeletingCase] = useState(false);
   const fileInputRef = useRef(null);
 
   const fetchCase = async () => {
@@ -200,6 +202,20 @@ export default function CaseDetailPage() {
     }
   };
 
+  const handleDeleteCase = async () => {
+    setDeletingCase(true);
+    setActionError('');
+    try {
+      await api.delete(`/api/cases/${caseId}`);
+      navigate('/dashboard');
+    } catch (err) {
+      setActionError(err.response?.data?.detail || 'Delete failed — admin only');
+      setShowDeleteConfirm(false);
+    } finally {
+      setDeletingCase(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -342,6 +358,9 @@ export default function CaseDetailPage() {
           >
             {isOpen ? <><Lock className="w-4 h-4"/> Close Case</> : <><Unlock className="w-4 h-4"/> Reopen Case</>}
           </button>
+          <button onClick={()=>setShowDeleteConfirm(true)} title="Delete case (admin)" className="p-2.5 rounded-xl hover:bg-red-500/10 text-trace-text-dim hover:text-red-400 border border-transparent hover:border-red-500/20 transition-colors">
+            <Trash2 className="w-4 h-4"/>
+          </button>
         </div>
       </div>
 
@@ -408,6 +427,21 @@ export default function CaseDetailPage() {
             <div className="flex gap-3 mt-6">
               <button onClick={()=>setShowCloseConfirm(false)} className="btn-secondary flex-1" disabled={closing}>Cancel</button>
               <button onClick={confirmClose} disabled={closing} className="btn-primary flex-1 bg-amber-600 hover:bg-amber-500 flex items-center justify-center gap-2">{closing ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Lock className="w-4 h-4"/>} {closing ? 'Closing...' : `Close & File${selectedCulprits.length ? ` (${selectedCulprits.length})` : ''}`}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirm — admin hard delete */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="glass rounded-2xl p-6 w-full max-w-md animate-slide-in-up border border-red-500/20">
+            <div className="w-12 h-12 rounded-full bg-red-500/15 flex items-center justify-center mx-auto mb-4"><Trash2 className="w-6 h-6 text-red-400"/></div>
+            <h2 className="text-lg font-semibold text-trace-text text-center">Delete case permanently?</h2>
+            <p className="text-sm text-trace-text-muted text-center mt-2">This will permanently delete <span className="text-white font-medium">“{caseData.name}”</span> and all its documents, extractions, and graph data. Audited as <span className="font-mono text-xs">CASE_DELETED</span>. Cannot be undone.</p>
+            <div className="flex gap-3 mt-6">
+              <button onClick={()=>setShowDeleteConfirm(false)} className="btn-secondary flex-1" disabled={deletingCase}>Cancel</button>
+              <button onClick={handleDeleteCase} disabled={deletingCase} className="flex-1 bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50">{deletingCase ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Trash2 className="w-4 h-4"/>} {deletingCase ? 'Deleting…' : 'Delete forever'}</button>
             </div>
           </div>
         </div>
