@@ -79,22 +79,21 @@ def refine_entity_type(val: str, initial_type: str, sentence_prefix: str) -> str
     lower_val = val.lower()
     tokens = set(lower_val.split())
 
-    # 1. Indicator keyword override
+    # 1. Indicator keyword override (strong morphological cue)
     if tokens & LOCATION_INDICATORS:
         return "LOCATION"
 
-    # 2. Syntactic preceding context cues
-    if LOCATION_PREPOSITIONS_RE.search(sentence_prefix):
-        if initial_type in ("PERSON", "ORG"):
-            return "LOCATION"
-    # Fallback for "near the X", "at the X" where prefix ends with "the " but contains preposition just before
-    elif re.search(r"\b(?:at|near|in|to|from|towards|through|around|heading\s+to|located\s+in|outside)\s+the\s+$", sentence_prefix, re.I):
-        if initial_type in ("PERSON", "ORG"):
-            return "LOCATION"
+    # 2. Person vs location preposition cues — person takes precedence over generic "to"
+    is_person_cue = bool(PERSON_INDICATORS_RE.search(sentence_prefix))
+    is_location_cue = bool(LOCATION_PREPOSITIONS_RE.search(sentence_prefix) or re.search(r"\b(?:at|near|in|to|from|towards|through|around|heading\s+to|located\s+in|outside)\s+the\s+$", sentence_prefix, re.I))
 
-    if PERSON_INDICATORS_RE.search(sentence_prefix):
-        if initial_type in ("LOCATION", "GPE", "ORG"):
-            return "PERSON"
+    if is_person_cue and initial_type in ("LOCATION", "GPE", "ORG"):
+        return "PERSON"
+    # If both cues present (e.g., "spoke to X" contains "to"), person cue wins — do not flip PERSON to LOCATION
+    if is_location_cue and initial_type in ("PERSON", "ORG"):
+        if is_person_cue:
+            return initial_type
+        return "LOCATION"
 
     # 3. Standardize GPE -> LOCATION
     if initial_type in ("GPE", "LOC"):
@@ -125,6 +124,57 @@ def apply_toponymic_rules(surface: str, current_type: str) -> str:
         if lower.startswith(prefix + " "):
             return "PERSON"
     return current_type
+
+
+# ─── Explicit procedural legal roles (human-stated only, no inference) ─
+VALID_PROCEDURAL_ROLES = {
+    "suspect", "accused", "victim", "witness",
+    "complainant", "informant", "person_of_interest",
+}
+
+HEADER_ROLE_PATTERNS = [
+    (re.compile(r"\bComplainant\s*[:\-]\s*([A-Za-z\s]+)", re.IGNORECASE), "complainant"),
+    (re.compile(r"\b(?:Subject|Missing(?:\s+Person)?)\s*[:\-]\s*([A-Za-z\s]+)", re.IGNORECASE), "victim"),
+    (re.compile(r"\b(?:Accused|Suspect)\s*[:\-]\s*([A-Za-z\s]+)", re.IGNORECASE), "suspect"),
+    (re.compile(r"\bWitness(?:\s+Name)?\s*[:\-]\s*([A-Za-z\s]+)", re.IGNORECASE), "witness"),
+]
+
+# Inline: role + Title-Case name (1-3 words), role case-insensitive but name must be Title-Case to avoid greedy lower-case capture
+INLINE_ROLE_PATTERN = re.compile(
+    r"\b(?i:(suspect|accused|victim|witness|informant|complainant))\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b",
+)
+
+
+def extract_procedural_roles(text: str, detected_persons: list[dict]) -> dict[str, str]:
+    """
+    Scans paragraph text for explicit role assignments.
+    Returns mapping of normalized person name -> role (e.g. {'georgekutty': 'suspect'}).
+    Deterministic, no prediction.
+    """
+    role_assignments: dict[str, str] = {}
+    # 1. Check form header patterns
+    for pattern, role in HEADER_ROLE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            raw_name = match.group(1).strip().lower()
+            # Clean raw_name similarly to surface normalization for matching
+            raw_name_clean = re.sub(r"\s+", " ", raw_name).strip()
+            for p in detected_persons:
+                p_low = p["value"].lower()
+                # Fuzzy containment: either contains or is contained
+                if p_low in raw_name_clean or raw_name_clean in p_low:
+                    role_assignments[p_low] = role
+    # 2. Check inline narrative cues — exact name match only (no fuzzy) to avoid spillover
+    for match in INLINE_ROLE_PATTERN.finditer(text):
+        role = match.group(1).lower()
+        name = match.group(2).strip().lower()
+        name_clean = re.sub(r"\s+", " ", name).strip()
+        if role in VALID_PROCEDURAL_ROLES:
+            for p in detected_persons:
+                p_low = p["value"].lower()
+                if p_low == name_clean:
+                    role_assignments[p_low] = role
+    return role_assignments
 
 # ─── Centralized surface normalization (prevents duplicate entity_ids) ─
 TITLE_PREFIX_RE = re.compile(
@@ -449,7 +499,36 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                         "extractor": "spacy.ner", "confidence": conf,
                     })
 
-    # Deduplicate identical (type, value, page, paragraph) rows
+    # ── Procedural role assignment (explicit only, provenance-preserving) ──
+    # Group PERSON entities by paragraph and scan that paragraph's text for explicit role cues.
+    # Each role is tied to the same page/paragraph/sentence as the person mention.
+    from collections import defaultdict as _defaultdict
+    by_para_persons: dict[tuple[int, int], list[dict]] = _defaultdict(list)
+    for _e in entities:
+        if _e["entity_type"] == "PERSON":
+            by_para_persons[(_e["page"], _e["paragraph"])].append(_e)
+    text_by_para: dict[tuple[int, int], str] = {}
+    for _pg in pages:
+        _pnum = _pg.get("page", 0)
+        for _idx, _para in enumerate(_pg.get("paragraphs", []), start=1):
+            text_by_para[(_pnum, _idx)] = _para
+    for _key, _persons in by_para_persons.items():
+        _para_text = text_by_para.get(_key, "")
+        if not _para_text:
+            continue
+        _role_map = extract_procedural_roles(_para_text, _persons)
+        for _p in _persons:
+            _role = _role_map.get(_p["value"].lower())
+            if _role:
+                _p["procedural_role"] = _role
+            elif "procedural_role" not in _p:
+                _p["procedural_role"] = ""
+    # Ensure all entities have procedural_role field (empty for non-PERSON)
+    for _e in entities:
+        if "procedural_role" not in _e:
+            _e["procedural_role"] = "" if _e["entity_type"] == "PERSON" else ""
+
+    # Deduplicate identical (type, value, page, paragraph) rows — keep first role if duplicate
     seen = set()
     unique = []
     for e in entities:
@@ -457,4 +536,11 @@ def extract_entities(pages: list[dict]) -> list[dict]:
         if key not in seen:
             seen.add(key)
             unique.append(e)
+        else:
+            # If duplicate was discarded but had a role, propagate role to the kept entry
+            for u in unique:
+                if (u["entity_type"], u["value"].lower(), u["page"], u["paragraph"]) == key and e.get("procedural_role"):
+                    if not u.get("procedural_role"):
+                        u["procedural_role"] = e["procedural_role"]
+                    break
     return unique

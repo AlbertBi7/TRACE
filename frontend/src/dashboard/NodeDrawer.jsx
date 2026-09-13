@@ -93,6 +93,19 @@ export default function NodeDrawer({ caseId, node, onClose }) {
             </div>
           </section>
 
+          {/* Procedural Roles — explicit only, provenance-backed */}
+          {detail.procedural_roles?.length > 0 && (
+            <section>
+              <h4 className="text-[10px] uppercase tracking-wider text-trace-text-dim mb-2 flex items-center gap-1"><ShieldQuestion className="w-3 h-3"/> Procedural Roles (explicit)</h4>
+              <div className="flex flex-wrap gap-1.5">
+                {detail.procedural_roles.map(r=>(
+                  <span key={r} className="px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 text-xs font-medium capitalize">{r.replace('_',' ')}</span>
+                ))}
+              </div>
+              <p className="text-[10px] text-trace-text-dim mt-1.5">Role extracted only when explicitly stated in source (e.g., “witness Martin”) — see snippets below. No inference.</p>
+            </section>
+          )}
+
           {/* Connected edges */}
           <section>
             <h4 className="text-[10px] uppercase tracking-wider text-trace-text-dim mb-2 flex items-center gap-1">
@@ -129,14 +142,14 @@ export default function NodeDrawer({ caseId, node, onClose }) {
                       <span className="text-[10px] text-trace-primary font-medium truncate">
                         {p.filename} · p.{p.page} · ¶{p.paragraph}
                       </span>
-                      <span className="text-[10px] text-trace-text-dim flex-shrink-0">
-                        {(p.confidence * 100).toFixed(0)}%
+                      <span className="text-[10px] text-trace-text-dim flex-shrink-0 flex items-center gap-1.5">
+                        {(p.confidence * 100).toFixed(0)}% {p.procedural_role ? <span className="px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/20 text-[9px] capitalize">{p.procedural_role.replace('_',' ')}</span> : null}
                       </span>
                     </div>
                     <blockquote className="text-[11px] text-trace-text-muted italic leading-relaxed border-l-2 border-trace-border-light pl-2">
                       “{p.snippet}”
                     </blockquote>
-                    <p className="text-[9px] text-trace-text-dim mt-1.5 font-mono">via {p.extractor}</p>
+                    <p className="text-[9px] text-trace-text-dim mt-1.5 font-mono">via {p.extractor}{p.procedural_role ? ` · role:${p.procedural_role}` : ''}</p>
                   </div>
                 ))}
               </div>

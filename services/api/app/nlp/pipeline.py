@@ -129,6 +129,7 @@ async def run_extraction(document_id: str, use_llm_fallback: bool = True) -> dic
             "paragraph": e["paragraph"],
             "extractor": e["extractor"],
             "confidence": e["confidence"],
+            "procedural_role": e.get("procedural_role", "") or "",
         }
         for e in entities
     ]

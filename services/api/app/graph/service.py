@@ -85,10 +85,10 @@ def build_canonicalization(merges: list[dict]) -> dict[str, str]:
 def normalize_entities(entity_rows: list[dict], canon_parent: dict[str, str], value_of: dict[str, str]) -> dict[str, dict]:
     """
     Collapse extraction ids to canonical nodes.
-    Returns global_id → {entity_type, name, aliases, provenance_ids, case_ids}
+    Returns global_id → {entity_type, name, aliases, provenance_ids, case_ids, procedural_roles}
     Aggressively normalizes surface (punctuation, titles) before hashing so
     slight variations converge, but every (page,paragraph,snippet) provenance
-    is still preserved in provenance_ids.
+    is still preserved in provenance_ids. Procedural roles (explicit only) are aggregated.
     """
     nodes: dict[str, dict] = {}
     for r in entity_rows:
@@ -100,6 +100,7 @@ def normalize_entities(entity_rows: list[dict], canon_parent: dict[str, str], va
             "entity_type": r["entity_type"],
             "name": canonical_val,
             "aliases": set(), "provenance_ids": set(), "case_ids": set(),
+            "procedural_roles": set(),
         })
         # Store cleaned alias for display dedup; raw variations still collapse via g_id
         cleaned_alias = _clean_entity_surface(r["value"], r["entity_type"])
@@ -107,6 +108,10 @@ def normalize_entities(entity_rows: list[dict], canon_parent: dict[str, str], va
             node["aliases"].add(cleaned_alias)
         node["provenance_ids"].add(str(r["provenance_id"]))
         node["case_ids"].add(str(r["case_id"]))
+        # Aggregate explicit procedural roles (e.g., suspect/witness/complainant) per node
+        role = (r.get("procedural_role") or "").strip().lower()
+        if role:
+            node["procedural_roles"].add(role)
 
     # Display name = most complete surface form (longest alias); deterministic.
     for node in nodes.values():
@@ -152,7 +157,7 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
 
     entity_rows = await pool.fetch(
         """SELECT e.entity_or_edge_id, e.entity_type, e.value,
-                  e.id AS provenance_id, d.case_id
+                  e.procedural_role, e.id AS provenance_id, d.case_id
             FROM extraction_log e
             JOIN documents d ON d.id = e.document_id
             WHERE e.head_entity_id = '' AND e.value <> ''""",
@@ -197,7 +202,8 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
                    x.name = $name,
                    x.aliases = $aliases,
                    x.provenance_ids = $prov,
-                   x.case_ids = $cases""",
+                   x.case_ids = $cases,
+                   x.procedural_roles = $roles""",
             {
                 "gid": gid,
                 "etype": n["entity_type"],
@@ -205,6 +211,7 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
                 "aliases": sorted(n["aliases"]),
                 "prov": sorted(n["provenance_ids"]),
                 "cases": sorted(n["case_ids"]),
+                "roles": sorted(n.get("procedural_roles", set())),
             },
         )
 
