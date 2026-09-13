@@ -48,7 +48,7 @@ npx playwright test                        # smoke at frontend/tests/smoke.spec.
 - Migrations split: `001` via Postgres init; `002-004` via `app/db/migrate.py`. Both idempotent.
 - Neo4j healthcheck generous (`start_period:90s`, `timeout:30s`, `retries:30`); `neo4j-init` waits for `service_healthy`. Don't hit API until `ps` shows healthy.
 - spaCy model (`SPACY_MODEL=en_core_web_sm`) downloads at image build (`services/api/Dockerfile:18`); offline build warns, runtime degrades to regex-only (`app/nlp/spacy_model.py`).
-- PyPDF2 has no OCR — scanned PDFs return `422` with explicit error; provide text-layer PDFs. Upload limit 50 MB, types `pdf`/`txt`/`csv`/`json` (`app/routers/documents.py`).
+- Scanned PDFs route to OCR fallback (`tesseract-ocr` eng+hin + `poppler-utils` pdf2image dpi=200) preserving `file/page/paragraph` (`MAX_PARA_CHARS=600`); blank/failed OCR still `422`. Direct image uploads `png/jpg/jpeg` via `parse_image` OCR. Native text PDFs use fast `PyPDF2` path. Upload limit 50 MB (`app/routers/documents.py`, `app/ingestion/parsers.py`).
 - Entity IDs deterministic SHA-1 of `(type, canonical value)` (`app/graph/service.py:_global_entity_id`); merges use union-find with lexicographic root (`build_canonicalization`), longest-alias wins for display.
 - Graph sync (`POST /api/cases/{id}/graph/sync`) is idempotent, global read + case-scoped reconciliation; rerun after merges. Neo4j `:Entity` unique on `entity_id` (not per-type labels).
 - Uploads: raw files on disk volume (`/uploads` as `caseId_docId_filename`), normalized `extracted_text` + `parsed_content` (pages→paragraphs) in Postgres for provenance.

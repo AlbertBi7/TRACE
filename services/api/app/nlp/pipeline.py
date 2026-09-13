@@ -56,7 +56,7 @@ async def run_extraction(document_id: str, use_llm_fallback: bool = True) -> dic
     """
     pool = await get_pool()
     doc = await pool.fetchrow(
-        "SELECT id, case_id, filename, parsed_content FROM documents WHERE id = $1",
+        "SELECT id, case_id, filename, filetype, parsed_content FROM documents WHERE id = $1",
         document_id,
     )
     if not doc:
@@ -67,8 +67,20 @@ async def run_extraction(document_id: str, use_llm_fallback: bool = True) -> dic
     if not pages:
         raise ValueError("Document has no parsed content — re-upload the file")
 
+    is_ocr = bool(parsed.get("ocr")) if isinstance(parsed, dict) else False
+    if not is_ocr:
+        ftype = str(doc.get("filetype") or "").lower()
+        if ftype in ("png", "jpg", "jpeg") or ":ocr" in ftype:
+            is_ocr = True
+
     # 1) Entities
     entities = extract_entities(pages)
+    # Tag extractor provenance when OCR was used (deterministic transcription, not inference)
+    if is_ocr:
+        for e in entities:
+            base = e.get("extractor", "unknown")
+            if not base.endswith(":ocr"):
+                e["extractor"] = f"{base}:ocr"
 
     # 2) Relations over co-occurring entities; resolve endpoint types first so
     #    relation rows can be joined to entity ids deterministically.
@@ -79,11 +91,21 @@ async def run_extraction(document_id: str, use_llm_fallback: bool = True) -> dic
     for r in relations:
         r["_head_type"] = type_by_value.get(r["head_value"].lower(), "ENT")
         r["_tail_type"] = type_by_value.get(r["tail_value"].lower(), "ENT")
+    if is_ocr:
+        for r in relations:
+            base = r.get("extractor", "unknown")
+            if not base.endswith(":ocr"):
+                r["extractor"] = f"{base}:ocr"
 
     # 3) Scoped LLM fallback for below-threshold pairs (no-op without config)
     extra_relations = []
     if llm_calls:
         extra_relations = await resolve_llm_calls(llm_calls)
+        if is_ocr:
+            for er in extra_relations:
+                base = er.get("extractor", "unknown")
+                if not base.endswith(":ocr"):
+                    er["extractor"] = f"{base}:ocr"
         relations.extend(extra_relations)
 
     _resolve_entity_ids(entities, relations)
