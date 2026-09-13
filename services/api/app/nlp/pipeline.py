@@ -27,8 +27,8 @@ TYPE_PREFIX = {
 
 def _entity_id(entity_type: str, value: str) -> str:
     """Deterministic extraction identity: TYPE-HASH8 of (type, lowercase cleaned value)."""
-    cleaned = clean_entity_surface(value, entity_type)
-    h = hashlib.sha1(f"{entity_type}|{cleaned.lower()}".encode()).hexdigest()[:8].upper()
+    cleaned = clean_entity_surface(value, entity_type).lower().strip()
+    h = hashlib.sha1(f"{entity_type}|{cleaned}".encode()).hexdigest()[:8].upper()
     return f"{TYPE_PREFIX.get(entity_type, 'ENT')}-{h}"
 
 
@@ -40,9 +40,9 @@ def _edge_id(head_id: str, relation: str, tail_id: str) -> str:
 def _resolve_entity_ids(entities: list[dict], relations: list[dict]) -> None:
     """Attach stable ids to entity rows and map relation values → entity ids."""
     # Use cleaned lower for dedup key to prevent duplicate hashes from punctuation/casing/titles
-    by_value = {(e["entity_type"], clean_entity_surface(e["value"], e["entity_type"]).lower()): _entity_id(e["entity_type"], e["value"]) for e in entities}
+    by_value = {(e["entity_type"], clean_entity_surface(e["value"], e["entity_type"]).lower().strip()): _entity_id(e["entity_type"], e["value"]) for e in entities}
     for e in entities:
-        e["entity_or_edge_id"] = by_value[(e["entity_type"], clean_entity_surface(e["value"], e["entity_type"]).lower())]
+        e["entity_or_edge_id"] = by_value[(e["entity_type"], clean_entity_surface(e["value"], e["entity_type"]).lower().strip())]
     for r in relations:
         head_type = r.pop("_head_type", "")
         tail_type = r.pop("_tail_type", "")
@@ -90,11 +90,11 @@ async def run_extraction(document_id: str, use_llm_fallback: bool = True) -> dic
     #    relation rows can be joined to entity ids deterministically.
     type_by_value = {}
     for e in entities:
-        type_by_value.setdefault(e["value"].lower(), e["entity_type"])
+        type_by_value.setdefault(clean_entity_surface(e["value"], e["entity_type"]).lower().strip(), e["entity_type"])
     relations, llm_calls = extract_relations(pages, entities, use_llm_fallback=use_llm_fallback)
     for r in relations:
-        r["_head_type"] = type_by_value.get(r["head_value"].lower(), "ENT")
-        r["_tail_type"] = type_by_value.get(r["tail_value"].lower(), "ENT")
+        r["_head_type"] = type_by_value.get(clean_entity_surface(r["head_value"], "PERSON").lower().strip(), "ENT")
+        r["_tail_type"] = type_by_value.get(clean_entity_surface(r["tail_value"], "PERSON").lower().strip(), "ENT")
     if is_ocr:
         for r in relations:
             base = r.get("extractor", "unknown")

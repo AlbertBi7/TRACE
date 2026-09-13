@@ -480,9 +480,15 @@ export default function GraphExplorer() {
     });
   };
 
-  const entityOptions = graph.nodes
-    .filter((n) => n.entity_type === 'PERSON' || n.entity_type === 'ORG')
-    .sort((a, b) => a.label.localeCompare(b.label));
+  const entityOptions = useMemo(() => {
+    const seen = new Map();
+    for (const n of graph.nodes) {
+      if (n.entity_type !== 'PERSON' && n.entity_type !== 'ORG') continue;
+      const key = n.label.trim().toLowerCase();
+      if (!seen.has(key)) seen.set(key, n);
+    }
+    return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [graph.nodes]);
 
   return (
     <div className="flex flex-col flex-1 min-h-0 h-full" style={{ minHeight: 0 }}>

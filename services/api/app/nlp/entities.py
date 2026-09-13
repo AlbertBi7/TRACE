@@ -30,10 +30,28 @@ VEHICLE_RE = re.compile(
 # spaCy label → TRACE entity type
 NER_LABEL_MAP = {"PERSON": "PERSON", "ORG": "ORG", "GPE": "LOCATION", "LOC": "LOCATION"}
 
-# Noise filters for NER hits
+# Noise filters for NER hits — expanded to cover form-label leakage
 ORG_BLOCKLIST = re.compile(
-    r"\b(bank|police|court|department|ministry|bureau|team|case|unit|report)\b", re.I
+    r"\b(bank|police|court|department|ministry|bureau|team|case|unit|report|complainant|subject|accused|victim|witness|informant|fir|police station|ps|district|case type|date of occurrence|alibi corroboration|investigation report)\b",
+    re.I,
 )
+
+# Header / form-label blocklist (all-caps headers and FIR table labels)
+HEADER_LABEL_BLOCKLIST = re.compile(
+    r"\b(complainant|subject|accused|victim|witness|informant|fir|police station|ps|district|case type|date of occurrence|alibi corroboration|investigation report)\b",
+    re.I,
+)
+
+# Regex to split conjoined spans like "Rani, Anju" or "Anju and Anu" or "Rani & Anju"
+CONJOINED_SPLIT_RE = re.compile(r"\s*(?:,|and|&)\s*", re.I)
+
+# Words to strip when they collocate as label suffix/prefix on a person name
+# e.g., "Geetha Prabhakar Subject" -> "Geetha Prabhakar", "Prabhakar Case" -> "Prabhakar"
+LABEL_STRIP_WORDS = [
+    "complainant", "subject", "accused", "victim", "witness", "informant",
+    "fir", "police station", "ps", "district", "case type", "case",
+    "date of occurrence", "alibi corroboration", "investigation report",
+]
 
 # ─── Centralized surface normalization (prevents duplicate entity_ids) ─
 TITLE_PREFIX_RE = re.compile(
@@ -61,6 +79,64 @@ def clean_entity_surface(raw_val: str, entity_type: str) -> str:
         val = TRAILING_PUNCT_RE.sub("", val)
     val = re.sub(r"\s+", " ", val).strip()
     return val
+
+
+def _strip_label_collocations(val: str, entity_type: str) -> str:
+    """
+    Strip leading/trailing label words that collocate on person names
+    due to FIR table layout, e.g., "Geetha Prabhakar Subject" -> "Geetha Prabhakar".
+    Iteratively removes phrases from LABEL_STRIP_WORDS at either end.
+    """
+    original = val
+    # Sort phrases longest first so "police station" beats "ps"
+    phrases = sorted(LABEL_STRIP_WORDS, key=len, reverse=True)
+    changed = True
+    while changed:
+        changed = False
+        low = val.lower()
+        for phrase in phrases:
+            pl = phrase.lower()
+            # leading phrase + space
+            if low == pl:
+                return ""
+            if low.startswith(pl + " "):
+                val = val[len(phrase):].lstrip(" ,;:.-")
+                val = clean_entity_surface(val, entity_type)
+                changed = True
+                break
+            if low.endswith(" " + pl):
+                val = val[: -len(phrase)].rstrip(" ,;:.-")
+                val = clean_entity_surface(val, entity_type)
+                changed = True
+                break
+    return val
+
+
+def _is_header_noise(val: str) -> bool:
+    """All-caps header or form-label leakage should be discarded."""
+    # 1) All-caps header: e.g., "RECORDED & ALIBI CORROBORATION"
+    if val.isupper() and len(val.split()) > 1:
+        return True
+    # 2) Form / table label blocklist
+    if HEADER_LABEL_BLOCKLIST.search(val):
+        # But allow if after stripping label collocations the remainder is a clean person
+        # The caller should try stripping first; this is fallback for pure labels
+        # like "Complainant" alone -> discard
+        stripped = _strip_label_collocations(val, "PERSON")
+        if not stripped or stripped.lower() == val.lower():
+            return True
+        # If stripping reduces to a shorter value, let caller use stripped instead of discarding
+        # So we don't discard here if stripping would salvage a name
+        # Check if val is exactly a label phrase -> discard
+        low = val.strip().lower()
+        for phrase in LABEL_STRIP_WORDS:
+            if low == phrase.lower():
+                return True
+        # If val contains label as major component and is short, treat as noise
+        # e.g., "Rajakkad PS FIR" contains two labels; after stripping it may leave "Rajakkad"
+        # That's handled by caller stripping; here we just flag if the whole val is label-heavy
+        # For now, only discard if the stripped version is empty or still matches blocklist without improvement
+    return False
 
 
 def _clean(text: str) -> str:
@@ -145,8 +221,59 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                     value = clean_entity_surface(raw_val, label)
                     if len(value) < 2 or _claimed(ent.start_char, ent.end_char):
                         continue
+
+                    # ── Header / form-label noise filters ─────────────────
+                    # 1) All-caps headers like "RECORDED & ALIBI CORROBORATION"
+                    if value.isupper() and len(value.split()) > 1:
+                        continue
+                    # 2) Strip label collocations first to salvage names like "Geetha Prabhakar Subject"
+                    stripped = _strip_label_collocations(value, label)
+                    if stripped != value:
+                        if not stripped or len(stripped) < 2:
+                            continue
+                        # Re-check all-caps after stripping
+                        if stripped.isupper() and len(stripped.split()) > 1:
+                            continue
+                        value = stripped
+                    # 3) Block pure header labels and leaked form fields
+                    if HEADER_LABEL_BLOCKLIST.search(value):
+                        continue
                     if label == "ORG" and ORG_BLOCKLIST.search(value):
                         continue
+
+                    # ── Conjoined span splitting (comma/and/&): "Rani, Anju" -> "Rani" + "Anju" ──
+                    if label == "PERSON" and CONJOINED_SPLIT_RE.search(value):
+                        # Only split if comma/& or standalone "and" present
+                        if "," in value or "&" in value or re.search(r"\band\b", value, re.I):
+                            parts = CONJOINED_SPLIT_RE.split(value)
+                            emitted = False
+                            for part in parts:
+                                part = part.strip()
+                                if not part:
+                                    continue
+                                part_val = clean_entity_surface(part, label)
+                                part_val = _strip_label_collocations(part_val, label)
+                                if len(part_val) < 2:
+                                    continue
+                                if part_val.isupper() and len(part_val.split()) > 1:
+                                    continue
+                                if HEADER_LABEL_BLOCKLIST.search(part_val):
+                                    continue
+                                if label == "ORG" and ORG_BLOCKLIST.search(part_val):
+                                    continue
+                                # Each split part is a separate candidate
+                                conf_part = 0.85 if label == "PERSON" else 0.75
+                                entities.append({
+                                    "entity_type": label, "value": part_val,
+                                    "snippet": text, "page": page_no, "paragraph": para_no,
+                                    "extractor": "spacy.ner", "confidence": conf_part,
+                                })
+                                emitted = True
+                            if emitted:
+                                continue
+                            # If no part survived, fall through to treat as single (will be discarded later)
+                            continue
+
                     if label in {"PERSON", "ORG"}:
                         # Legacy report-style designators not covered by TITLE_PREFIX_RE
                         # (e.g., subject/informant) — keep for backward compat
@@ -155,6 +282,7 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                             "", value, flags=re.I,
                         )
                         value = clean_entity_surface(value, label)
+                        value = _strip_label_collocations(value, label)
                         # NER spans sometimes swallow a connector plus the next
                         # entity ("Maya Iyer to Hyderabad"). Keep the portion
                         # before the connector as this entity, and re-run NER on
@@ -164,34 +292,49 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                             r"\s+(?:to|with|from|at)\s+", value, flags=re.I, maxsplit=1
                         )
                         value = clean_entity_surface(parts[0].strip(), label)
+                        value = _strip_label_collocations(value, label)
                         if len(parts) > 1:
                             tail = clean_entity_surface(parts[1].strip(), "LOCATION")
+                            tail = _strip_label_collocations(tail, "LOCATION")
                             if tail:
-                                tail_ents = nlp(tail).ents if nlp is not None else []
-                                if tail_ents:
-                                    for tail_ent in tail_ents:
-                                        tail_label = NER_LABEL_MAP.get(tail_ent.label_)
-                                        tail_raw = tail_ent.text
-                                        tail_value = clean_entity_surface(tail_raw, tail_label or "LOCATION")
-                                        if tail_label and len(tail_value) >= 2:
+                                # Header check for tail
+                                if not (tail.isupper() and len(tail.split()) > 1) and not HEADER_LABEL_BLOCKLIST.search(tail):
+                                    tail_ents = nlp(tail).ents if nlp is not None else []
+                                    if tail_ents:
+                                        for tail_ent in tail_ents:
+                                            tail_label = NER_LABEL_MAP.get(tail_ent.label_)
+                                            tail_raw = tail_ent.text
+                                            tail_value = clean_entity_surface(tail_raw, tail_label or "LOCATION")
+                                            tail_value = _strip_label_collocations(tail_value, tail_label or "LOCATION")
+                                            if tail_value.isupper() and len(tail_value.split()) > 1:
+                                                continue
+                                            if HEADER_LABEL_BLOCKLIST.search(tail_value):
+                                                continue
+                                            if tail_label and len(tail_value) >= 2:
+                                                entities.append({
+                                                    "entity_type": tail_label, "value": tail_value,
+                                                    "snippet": text, "page": page_no, "paragraph": para_no,
+                                                    "extractor": "spacy.ner", "confidence": 0.7,
+                                                })
+                                    elif tail and tail[0].isupper() and len(tail.split()) <= 3:
+                                        # Deterministic fallback: a title-case tail after a
+                                        # PERSON+connector is usually a place ("…to Hyderabad")
+                                        # that the small NER model misses on bare tokens.
+                                        if not HEADER_LABEL_BLOCKLIST.search(tail):
                                             entities.append({
-                                                "entity_type": tail_label, "value": tail_value,
+                                                "entity_type": "LOCATION", "value": tail,
                                                 "snippet": text, "page": page_no, "paragraph": para_no,
-                                                "extractor": "spacy.ner", "confidence": 0.7,
+                                                "extractor": "spacy.ner.tail", "confidence": 0.55,
                                             })
-                                elif tail and tail[0].isupper() and len(tail.split()) <= 3:
-                                    # Deterministic fallback: a title-case tail after a
-                                    # PERSON+connector is usually a place ("…to Hyderabad")
-                                    # that the small NER model misses on bare tokens.
-                                    entities.append({
-                                        "entity_type": "LOCATION", "value": tail,
-                                        "snippet": text, "page": page_no, "paragraph": para_no,
-                                        "extractor": "spacy.ner.tail", "confidence": 0.55,
-                                    })
                         if len(value) < 2:
                             continue
                     else:
-                        # For LOCATION etc., already cleaned, but ensure
+                        # For LOCATION etc., already cleaned and header-filtered, but ensure
+                        value = _strip_label_collocations(value, label)
+                        if value.isupper() and len(value.split()) > 1:
+                            continue
+                        if HEADER_LABEL_BLOCKLIST.search(value):
+                            continue
                         value = clean_entity_surface(value, label)
                         if len(value) < 2:
                             continue
