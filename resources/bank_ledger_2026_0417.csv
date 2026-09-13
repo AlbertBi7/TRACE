@@ -1,0 +1,6 @@
+date,from_account,to_account,from_holder,to_holder,amount_inr,memo,bank,branch
+2026-01-15,041720001123,041720003301,Devraj Oberoi,Sunrise Lodge,8500,advance booking - Room 104/105,Vantara Cooperative Bank,Kalinjur
+2026-01-28,041720001123,041720003302,Devraj Oberoi,Kori Bakery,12000,bulk order - workshop snacks,Vantara Cooperative Bank,Kalinjur
+2026-02-01 10:22,041720001123,041720009981,Devraj Oberoi,Farhan Qureshi,45000,personal loan,Vantara Cooperative Bank,Kalinjur
+2026-01-20,041720009981,041720004401,Farhan Qureshi,Ayesha Qureshi,15000,family transfer,Vantara Cooperative Bank,Kalinjur
+2026-01-10,041720001123,041720005501,Devraj Oberoi,Vantara Cable Network,25000,monthly settlement,Vantara Cooperative Bank,Kalinjur

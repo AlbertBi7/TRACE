@@ -1,0 +1,86 @@
+[
+  {
+    "name": "Vidya Shergill",
+    "phone": "98220-11456",
+    "role": "IG, Vantara District HQ / Complainant",
+    "address": "Officers Colony, Sector 4, Vantara"
+  },
+  {
+    "name": "Kabir Shergill",
+    "phone": "91234-55210",
+    "alt_phone": "91234-55211",
+    "role": "Missing person, 24y",
+    "address": "Officers Colony, Sector 4, Vantara"
+  },
+  {
+    "name": "Devraj Oberoi",
+    "phone": "98110-44231",
+    "alt_phone": "98110-44233",
+    "role": "Cable-TV operator, House 12 Riverside Lane, Kalinjur",
+    "vehicle": "VT04 AB 7734"
+  },
+  {
+    "name": "Meenal Oberoi",
+    "phone": "98110-44232",
+    "role": "Wife of Devraj Oberoi",
+    "address": "House 12, Riverside Lane, Kalinjur"
+  },
+  {
+    "name": "Ira Oberoi",
+    "phone": "",
+    "role": "Daughter, 17y, Vantara Public School",
+    "address": "House 12, Riverside Lane"
+  },
+  {
+    "name": "Naina Oberoi",
+    "phone": "",
+    "role": "Daughter, 12y",
+    "address": "House 12, Riverside Lane"
+  },
+  {
+    "name": "Farhan Qureshi",
+    "phone": "98110-44233",
+    "role": "Constable, Kalinjur Town PS, Belt 412",
+    "account": "041720009981"
+  },
+  {
+    "name": "Suresh Patil",
+    "phone": "97700-88123",
+    "role": "Manager, Sunrise Lodge, Rudrapuram",
+    "account": "041720003301"
+  },
+  {
+    "name": "Ganesh Kori",
+    "phone": "97700-88124",
+    "role": "Owner, Kori Bakery, Rudrapuram",
+    "account": "041720003302"
+  },
+  {
+    "name": "Ramesh Dabholkar",
+    "phone": "98230-00118",
+    "role": "SI, Kalinjur Town PS, IO",
+    "address": "Kalinjur Town PS"
+  },
+  {
+    "name": "Anil Deshmukh",
+    "phone": "97700-88125",
+    "role": "Instructor, Vantara District Sports Association"
+  },
+  {
+    "name": "Sunita Pawar",
+    "phone": "98215-33441",
+    "role": "Neighbour, House 10 Riverside Lane, Kalinjur"
+  },
+  {
+    "name": "Sunrise Lodge",
+    "phone": "97700-88123",
+    "role": "Hotel, Rudrapuram",
+    "address": "Station Road, Rudrapuram"
+  },
+  {
+    "name": "Kori Bakery",
+    "phone": "97700-88124",
+    "role": "Bakery, Rudrapuram",
+    "address": "Market Road, Rudrapuram"
+  }
+]

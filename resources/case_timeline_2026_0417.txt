@@ -1,0 +1,22 @@
+CASE TIMELINE — FIR 2026/0417 Kalinjur (Drishyam)
+All timestamps IST, fictional
+
+2026-01-30 16:30 — Devraj Oberoi claims departure Kalinjur → Rudrapuram in VT04 AB 7734
+2026-01-30 16:35 — Toll KJR-01 records VT04 AB 7734 Kalinjur→Rudrapuram (consistent)
+2026-01-30 18:45 — Missed call: Kabir Shergill (91234-55210) → Devraj Oberoi (98110-44231)
+2026-01-30 19:05 — Call: 98110-44233 → Suresh Patil (97700-88123) [undisclosed number]
+2026-01-30 19:40 — Call: Devraj (98110-44231) → Ganesh Kori (97700-88124)
+2026-01-30 20:40 — Kori Bakery Bill KB-1847 to Devraj Oberoi, 98110-44231, Rudrapuram (disputed)
+2026-01-30 21:15 — Tower KJR-04: 98110-44231 at Kalinjur (CONTRADICTS Rudrapuram alibi)
+2026-01-30 21:18 — Tower KJR-04: 98110-44232 at Kalinjur (CONTRADICTS)
+2026-01-30 21:55 — Sunrise Lodge check-in 104/105: Devraj/Meenal/Ira/Naina (register shows 21:55, manager later says 00:40)
+2026-01-31 06:10 — Toll KJR-01: VT04 AB 7734 Rudrapuram→Kalinjur (return)
+2026-01-31 09:20 — Call: 98110-44233 → Farhan Qureshi (98110-44233 is Farhan's service? Actually Devraj's undisclosed)
+2026-01-31 11:45 — Call: 98110-44233 → Farhan Qureshi
+2026-01-31 18:30 — Call: 98110-44233 → Farhan Qureshi
+2026-02-01 10:22 — Bank: 041720001123 (Devraj) → 041720009981 (Farhan) Rs 45,000 "personal loan"
+2026-02-03 09:45 — FIR filed by Vidya Shergill (98220-11456) at Kalinjur Town PS
+2026-02-05 — Supplementary diary by SI Ramesh Dabholkar recommends CID transfer
+
+Key entities for TRACE graph: 12 persons, 8 phones, 4 accounts, 2 locations (Kalinjur/Rudrapuram), 1 vehicle.
+Heuristic leads to surface: shared phone +91-99999-33333 across cases, shared account 041720001123, bridge nodes.

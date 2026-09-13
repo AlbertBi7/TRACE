@@ -1,0 +1,4 @@
+bill_no,timestamp,customer_name,phone,items,amount,payment_mode
+KB-1847,2026-01-30 20:40:00,Devraj Oberoi,98110-44231,"Bread, Snacks, Water",340,Cash
+KB-1846,2026-01-30 19:10:00,Suresh Patil,97700-88123,"Tea, Biscuits",120,Cash
+KB-1848,2026-01-31 09:15:00,Ramesh Dabholkar,98230-00118,Tea,30,Cash
