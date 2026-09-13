@@ -53,6 +53,7 @@ async def get_case_graph(case_id: str, current_user: dict = Depends(get_current_
             "provenance_count": len(d.get("provenance_ids", [])),
             "case_ids": cases,
             "in_case": case_id in cases,
+            "procedural_roles": d.get("procedural_roles", []),
         }
 
     nodes: dict[str, dict] = {}
@@ -129,7 +130,7 @@ async def get_node_detail(
             pool = await get_pool()
             rows = await pool.fetch(
                 """SELECT e.id, e.snippet, e.page, e.paragraph, e.entity_type, e.extractor,
-                          e.confidence, e.value,
+                          e.confidence, e.value, e.procedural_role,
                           d.filename, d.id AS document_id
                    FROM extraction_log e
                    JOIN documents d ON d.id = e.document_id
@@ -148,6 +149,7 @@ async def get_node_detail(
                     "extractor": r["extractor"],
                     "confidence": r["confidence"],
                     "value": r["value"],
+                    "procedural_role": r["procedural_role"] or "",
                 }
                 for r in rows
             ]
@@ -167,6 +169,7 @@ async def get_node_detail(
         "entity_type": n.get("entity_type", "ENT"),
         "aliases": n.get("aliases", []),
         "case_ids": n.get("case_ids", []),
+        "procedural_roles": n.get("procedural_roles", []),
         "cross_case": case_id not in n.get("case_ids", []),
         "provenance": provenance,
         "edges": [

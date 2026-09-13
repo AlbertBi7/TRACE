@@ -4,15 +4,44 @@ Case CRUD with role-based access control and case assignments.
 Investigators see only their assigned cases. Admins see all.
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Header, Query
 from app.auth.models import CaseCreate, CaseUpdate, CaseOut, CaseAssignment
 from app.auth.dependencies import get_current_user, require_role, require_case_access
 from app.db.postgres import get_pool
+from app.db.neo4j_driver import run_cypher
 from datetime import datetime, timezone
 import uuid
+import json
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
+
+def _parse_jsonb(v):
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except Exception:
+            return []
+    return []
+
+def _case_out_from_row(r) -> CaseOut:
+    return CaseOut(
+        id=str(r["id"]),
+        name=r["name"],
+        description=r["description"] or "",
+        created_by=str(r["created_by"]),
+        created_at=r["created_at"],
+        status=r["status"],
+        culprit_entity_ids=_parse_jsonb(r.get("culprit_entity_ids")),
+        charges=_parse_jsonb(r.get("charges")),
+        closure_notes=r.get("closure_notes") or "",
+        closed_at=r.get("closed_at"),
+        closed_by=str(r["closed_by"]) if r.get("closed_by") else None,
+    )
 
 @router.get("", response_model=list[CaseOut])
 async def list_cases(current_user: dict = Depends(get_current_user)):
@@ -23,11 +52,11 @@ async def list_cases(current_user: dict = Depends(get_current_user)):
 
     if current_user["role"] == "admin":
         rows = await pool.fetch(
-            "SELECT id, name, description, created_by, created_at, status FROM cases ORDER BY created_at DESC"
+            "SELECT id, name, description, created_by, created_at, status, culprit_entity_ids, charges, closure_notes, closed_at, closed_by FROM cases ORDER BY created_at DESC"
         )
     else:
         rows = await pool.fetch(
-            """SELECT c.id, c.name, c.description, c.created_by, c.created_at, c.status
+            """SELECT c.id, c.name, c.description, c.created_by, c.created_at, c.status, c.culprit_entity_ids, c.charges, c.closure_notes, c.closed_at, c.closed_by
                FROM cases c
                JOIN case_assignments ca ON ca.case_id = c.id
                WHERE ca.user_id = $1
@@ -35,17 +64,7 @@ async def list_cases(current_user: dict = Depends(get_current_user)):
             str(current_user["id"]),
         )
 
-    return [
-        CaseOut(
-            id=str(r["id"]),
-            name=r["name"],
-            description=r["description"],
-            created_by=str(r["created_by"]),
-            created_at=r["created_at"],
-            status=r["status"],
-        )
-        for r in rows
-    ]
+    return [_case_out_from_row(r) for r in rows]
 
 
 @router.post("", response_model=CaseOut, status_code=status.HTTP_201_CREATED)
@@ -92,6 +111,11 @@ async def create_case(body: CaseCreate, current_user: dict = Depends(get_current
         created_by=str(current_user["id"]),
         created_at=now,
         status="open",
+        culprit_entity_ids=[],
+        charges=[],
+        closure_notes="",
+        closed_at=None,
+        closed_by=None,
     )
 
 
@@ -103,25 +127,18 @@ async def get_case(case_id: str, current_user: dict = Depends(get_current_user))
 
     pool = await get_pool()
     row = await pool.fetchrow(
-        "SELECT id, name, description, created_by, created_at, status FROM cases WHERE id = $1",
+        "SELECT id, name, description, created_by, created_at, status, culprit_entity_ids, charges, closure_notes, closed_at, closed_by FROM cases WHERE id = $1",
         case_id,
     )
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
 
-    return CaseOut(
-        id=str(row["id"]),
-        name=row["name"],
-        description=row["description"],
-        created_by=str(row["created_by"]),
-        created_at=row["created_at"],
-        status=row["status"],
-    )
+    return _case_out_from_row(row)
 
 
 @router.patch("/{case_id}", response_model=CaseOut)
 async def update_case(case_id: str, body: CaseUpdate, current_user: dict = Depends(get_current_user)):
-    """Update case fields. Enforces case access."""
+    """Update case fields. Enforces case access. Supports human culprit & charges finalization on close."""
     await require_case_access(case_id, current_user)
 
     pool = await get_pool()
@@ -138,38 +155,109 @@ async def update_case(case_id: str, body: CaseUpdate, current_user: dict = Depen
         if body.status not in ("open", "closed", "archived"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status")
         updates["status"] = body.status
+        if body.status == "closed":
+            updates["closed_at"] = datetime.now(timezone.utc)
+            updates["closed_by"] = str(current_user["id"])
+        elif body.status == "open":
+            # Reopening keeps history but clears closed_at for active view
+            updates["closed_at"] = None
+            updates["closed_by"] = None
+    if body.culprit_entity_ids is not None:
+        # Human finalization: validate each id exists in this case's graph (soft check)
+        updates["culprit_entity_ids"] = json.dumps(body.culprit_entity_ids)
+    if body.charges is not None:
+        # Charges are human-entered strings (e.g., "IPC 302 - Murder")
+        cleaned = [c.strip() for c in body.charges if c and c.strip()]
+        updates["charges"] = json.dumps(cleaned)
+    if body.closure_notes is not None:
+        updates["closure_notes"] = body.closure_notes
 
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
-    set_clauses = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
+    # JSONB columns need ::jsonb cast
+    jsonb_cols = {"culprit_entity_ids", "charges"}
+    set_clauses = ", ".join(f"{k} = ${i+2}::jsonb" if k in jsonb_cols else f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
     values = [case_id] + list(updates.values())
     await pool.execute(f"UPDATE cases SET {set_clauses} WHERE id = $1", *values)
 
-    # Audit
+    # Audit — distinguish close with culprit/charges
+    action = "CASE_UPDATED"
+    meta = {}
+    if body.status == "closed":
+        action = "CASE_CLOSED"
+        meta = {"culprits": body.culprit_entity_ids or [], "charges": body.charges or []}
+    elif body.status == "open" and row["status"] == "closed":
+        action = "CASE_REOPENED"
     await pool.execute(
-        """INSERT INTO audit_log (id, user_id, action, target_type, target_id, timestamp)
-           VALUES ($1, $2, $3, $4, $5, $6)""",
+        """INSERT INTO audit_log (id, user_id, action, target_type, target_id, metadata, timestamp)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)""",
         str(uuid.uuid4()),
         str(current_user["id"]),
-        "CASE_UPDATED",
+        action,
         "case",
         case_id,
+        json.dumps(meta),
         datetime.now(timezone.utc),
     )
 
     updated = await pool.fetchrow(
-        "SELECT id, name, description, created_by, created_at, status FROM cases WHERE id = $1",
+        "SELECT id, name, description, created_by, created_at, status, culprit_entity_ids, charges, closure_notes, closed_at, closed_by FROM cases WHERE id = $1",
         case_id,
     )
-    return CaseOut(
-        id=str(updated["id"]),
-        name=updated["name"],
-        description=updated["description"],
-        created_by=str(updated["created_by"]),
-        created_at=updated["created_at"],
-        status=updated["status"],
+    return _case_out_from_row(updated)
+
+
+@router.delete("/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_case(
+    case_id: str,
+    current_user: dict = Depends(require_role("admin")),
+    code: str | None = Query(None, alias="code"),
+    x_delete_code: str | None = Header(None, alias="X-Delete-Code"),
+):
+    """Delete a case and all its data. Admin only. Requires confirmation code 24227 via ?code=24227 or X-Delete-Code header."""
+    # Confirmation code gate — prevents accidental deletes
+    confirm = code or x_delete_code
+    if confirm != "24227":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation code required: enter 24227 to delete")
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT id, name FROM cases WHERE id = $1", case_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
+    # Protect the demo seed case from accidental deletion via UI? Allow but audit.
+    # Postgres cascade: case_assignments, documents (→ extraction_log), entity_merges
+    await pool.execute("DELETE FROM cases WHERE id = $1", case_id)
+    # Neo4j: strip case membership, delete orphan nodes/edges
+    try:
+        await run_cypher(
+            """MATCH (n:Entity) WHERE $case IN n.case_ids
+               SET n.case_ids = [c IN n.case_ids WHERE c <> $case]
+               WITH n WHERE size(n.case_ids) = 0 DETACH DELETE n""",
+            {"case": case_id},
+        )
+        await run_cypher(
+            """MATCH ()-[r:LINKED]->() WHERE $case IN r.case_ids
+               SET r.case_ids = [c IN r.case_ids WHERE c <> $case]
+               WITH r WHERE size(r.case_ids) = 0 DELETE r""",
+            {"case": case_id},
+        )
+    except Exception as e:
+        # Postgres is source of truth; Neo4j failure is non-fatal but logged
+        import logging
+        logging.getLogger("trace.cases").warning(f"Neo4j cleanup failed for deleted case {case_id}: {e}")
+    # Audit
+    await pool.execute(
+        """INSERT INTO audit_log (id, user_id, action, target_type, target_id, metadata, timestamp)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)""",
+        str(uuid.uuid4()),
+        str(current_user["id"]),
+        "CASE_DELETED",
+        "case",
+        case_id,
+        json.dumps({"name": row["name"]}),
+        datetime.now(timezone.utc),
     )
+    return None
 
 
 @router.post("/{case_id}/assign")

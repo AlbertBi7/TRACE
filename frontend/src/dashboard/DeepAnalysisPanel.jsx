@@ -163,7 +163,14 @@ export default function DeepAnalysisPanel({ caseId, cyRef, nodes, onClose }) {
   if (error) return <div className="p-4 text-xs text-trace-danger">{error}</div>;
   if (!deep) return null;
 
-  const entityOptions = nodes.slice().sort((a,b)=>a.label.localeCompare(b.label));
+  const entityOptions = (() => {
+    const seen = new Map();
+    for (const n of nodes) {
+      const key = n.label.trim().toLowerCase();
+      if (!seen.has(key)) seen.set(key, n);
+    }
+    return [...seen.values()].sort((a,b)=>a.label.localeCompare(b.label));
+  })();
 
   return (
     <div className="h-full flex flex-col text-xs overflow-hidden bg-trace-surface border-l border-trace-border w-[380px] max-w-full">

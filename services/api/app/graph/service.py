@@ -10,6 +10,7 @@ Static seed.cypher remains a dev/demo fixture, fully separate from this path.
 
 import hashlib
 import logging
+import re
 from collections import defaultdict
 
 from app.db.postgres import get_pool
@@ -17,6 +18,26 @@ from app.db.neo4j_driver import run_cypher
 from app.config import settings
 
 logger = logging.getLogger("trace.graph")
+
+# Reuse centralized cleaner logic (mirrors entities.py to avoid circular import at startup)
+_TITLE_PREFIX_RE = re.compile(
+    r"^(?:mr|mrs|ms|dr|shri|smt|inspector|sub-inspector|si|ig|accused|victim|witness|suspect)\.?\s+",
+    re.IGNORECASE,
+)
+_TRAILING_PUNCT_RE = re.compile(r"[.,;:!?\'\"\s]+$")
+_LEADING_PUNCT_RE = re.compile(r"^[.,;:!?\'\"\s]+")
+
+
+def _clean_entity_surface(raw_val: str, entity_type: str) -> str:
+    val = raw_val.strip()
+    val = _LEADING_PUNCT_RE.sub("", val)
+    val = _TRAILING_PUNCT_RE.sub("", val)
+    if entity_type == "PERSON":
+        val = _TITLE_PREFIX_RE.sub("", val)
+        val = _LEADING_PUNCT_RE.sub("", val)
+        val = _TRAILING_PUNCT_RE.sub("", val)
+    val = re.sub(r"\s+", " ", val).strip()
+    return val
 
 
 def _h8(*parts: str) -> str:
@@ -26,7 +47,8 @@ def _h8(*parts: str) -> str:
 def _global_entity_id(entity_type: str, canonical_value: str) -> str:
     prefix = {"PERSON": "PER", "ORG": "ORG", "LOCATION": "LOC",
               "PHONE": "PHN", "VEHICLE": "VEH", "BANK_ACCOUNT": "BA"}.get(entity_type, "ENT")
-    return f"{prefix}-{_h8(entity_type, canonical_value)}"
+    cleaned = _clean_entity_surface(canonical_value, entity_type)
+    return f"{prefix}-{_h8(entity_type, cleaned)}"
 
 
 def build_canonicalization(merges: list[dict]) -> dict[str, str]:
@@ -63,21 +85,33 @@ def build_canonicalization(merges: list[dict]) -> dict[str, str]:
 def normalize_entities(entity_rows: list[dict], canon_parent: dict[str, str], value_of: dict[str, str]) -> dict[str, dict]:
     """
     Collapse extraction ids to canonical nodes.
-    Returns global_id → {entity_type, name, aliases, provenance_ids, case_ids}
+    Returns global_id → {entity_type, name, aliases, provenance_ids, case_ids, procedural_roles}
+    Aggressively normalizes surface (punctuation, titles) before hashing so
+    slight variations converge, but every (page,paragraph,snippet) provenance
+    is still preserved in provenance_ids. Procedural roles (explicit only) are aggregated.
     """
     nodes: dict[str, dict] = {}
     for r in entity_rows:
         ext_id = r["entity_or_edge_id"]
         root = canon_parent.get(ext_id, ext_id)
-        g_id = _global_entity_id(r["entity_type"], value_of.get(root, r["value"]))
+        canonical_val = value_of.get(root, r["value"])
+        g_id = _global_entity_id(r["entity_type"], canonical_val)
         node = nodes.setdefault(g_id, {
             "entity_type": r["entity_type"],
-            "name": value_of.get(root, r["value"]),
+            "name": canonical_val,
             "aliases": set(), "provenance_ids": set(), "case_ids": set(),
+            "procedural_roles": set(),
         })
-        node["aliases"].add(r["value"])
+        # Store cleaned alias for display dedup; raw variations still collapse via g_id
+        cleaned_alias = _clean_entity_surface(r["value"], r["entity_type"])
+        if cleaned_alias:
+            node["aliases"].add(cleaned_alias)
         node["provenance_ids"].add(str(r["provenance_id"]))
         node["case_ids"].add(str(r["case_id"]))
+        # Aggregate explicit procedural roles (e.g., suspect/witness/complainant) per node
+        role = (r.get("procedural_role") or "").strip().lower()
+        if role:
+            node["procedural_roles"].add(role)
 
     # Display name = most complete surface form (longest alias); deterministic.
     for node in nodes.values():
@@ -93,8 +127,11 @@ def normalize_relations(rel_rows: list[dict], canon_parent: dict[str, str], valu
         tail_root = canon_parent.get(r["tail_entity_id"], r["tail_entity_id"])
         head_type = r["head_type"] or "ENT"
         tail_type = r["tail_type"] or "ENT"
-        head_gid = _global_entity_id(head_type, value_of.get(head_root, r["head_value"]))
-        tail_gid = _global_entity_id(tail_type, value_of.get(tail_root, r["tail_value"]))
+        head_raw = value_of.get(head_root, r["head_value"])
+        tail_raw = value_of.get(tail_root, r["tail_value"])
+        # Clean before hashing so "Georgekutty." and "Georgekutty" collapse
+        head_gid = _global_entity_id(head_type, head_raw)
+        tail_gid = _global_entity_id(tail_type, tail_raw)
         key = (head_gid, r["relation"], tail_gid)
         e = edges.setdefault(key, {
             "head": head_gid, "tail": tail_gid, "relation": r["relation"],
@@ -120,7 +157,7 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
 
     entity_rows = await pool.fetch(
         """SELECT e.entity_or_edge_id, e.entity_type, e.value,
-                  e.id AS provenance_id, d.case_id
+                  e.procedural_role, e.id AS provenance_id, d.case_id
             FROM extraction_log e
             JOIN documents d ON d.id = e.document_id
             WHERE e.head_entity_id = '' AND e.value <> ''""",
@@ -146,9 +183,12 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
     canon_parent = build_canonicalization([dict(m) for m in merge_rows])
 
     # value_of: representative (most frequent) surface value per extraction id
+    # Clean before counting so "Georgekutty." and "Georgekutty" converge
     value_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for r in entity_rows:
-        value_counts[r["entity_or_edge_id"]][r["value"]] += 1
+        # entity_type needed for correct cleaning (PERSON strips titles)
+        cleaned = _clean_entity_surface(r["value"], r["entity_type"])
+        value_counts[r["entity_or_edge_id"]][cleaned] += 1
     value_of = {eid: max(vals, key=vals.get) for eid, vals in value_counts.items()}
 
     nodes = normalize_entities([dict(r) for r in entity_rows], canon_parent, value_of)
@@ -162,7 +202,8 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
                    x.name = $name,
                    x.aliases = $aliases,
                    x.provenance_ids = $prov,
-                   x.case_ids = $cases""",
+                   x.case_ids = $cases,
+                   x.procedural_roles = $roles""",
             {
                 "gid": gid,
                 "etype": n["entity_type"],
@@ -170,6 +211,7 @@ async def sync_case_to_graph(case_id: str | None = None) -> dict:
                 "aliases": sorted(n["aliases"]),
                 "prov": sorted(n["provenance_ids"]),
                 "cases": sorted(n["case_ids"]),
+                "roles": sorted(n.get("procedural_roles", set())),
             },
         )
 
