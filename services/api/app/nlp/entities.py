@@ -102,6 +102,30 @@ def refine_entity_type(val: str, initial_type: str, sentence_prefix: str) -> str
 
     return initial_type
 
+
+# ─── Indian toponymic suffixes / gazetteer fallback ──────────────
+INDIAN_LOCATION_SUFFIXES = (
+    "kad", "puzha", "puram", "nagar", "wadi", "pet", "peth", "giri",
+    "halli", "kodu", "ur", "oor", "patnam", "bad", "kot", "garh",
+    "junction", "estate", "quarry", "colony",
+)
+
+PERSON_PREFIXES = (
+    "mr", "mrs", "ms", "dr", "shri", "smt", "inspector", "si", "asi",
+    "constable", "driver", "operator", "advocate", "conductor",
+)
+
+
+def apply_toponymic_rules(surface: str, current_type: str) -> str:
+    lower = surface.lower().strip()
+    for suffix in INDIAN_LOCATION_SUFFIXES:
+        if lower.endswith(suffix) and len(lower) > len(suffix) + 2:
+            return "LOCATION"
+    for prefix in PERSON_PREFIXES:
+        if lower.startswith(prefix + " "):
+            return "PERSON"
+    return current_type
+
 # ─── Centralized surface normalization (prevents duplicate entity_ids) ─
 TITLE_PREFIX_RE = re.compile(
     r"^(?:mr|mrs|ms|dr|shri|smt|inspector|sub-inspector|si|ig|accused|victim|witness|suspect)\.?\s+",
@@ -283,6 +307,14 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                         if len(value) < 2:
                             continue
 
+                    # ── Toponymic suffix/prefix override (Indian gazetteer fallback) ─
+                    topo = apply_toponymic_rules(value, label)
+                    if topo != label:
+                        value = clean_entity_surface(value, topo)
+                        label = topo
+                        if len(value) < 2:
+                            continue
+
                     # ── Header / form-label noise filters ─────────────────
                     # 1) All-caps headers like "RECORDED & ALIBI CORROBORATION"
                     if value.isupper() and len(value.split()) > 1:
@@ -373,6 +405,11 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                                             if refined_tail != (tail_label or "LOCATION"):
                                                 tail_value = clean_entity_surface(tail_value, refined_tail)
                                                 tail_label = refined_tail
+                                            # Toponymic for tail
+                                            topo_tail = apply_toponymic_rules(tail_value, tail_label or "LOCATION")
+                                            if topo_tail != (tail_label or "LOCATION"):
+                                                tail_value = clean_entity_surface(tail_value, topo_tail)
+                                                tail_label = topo_tail
                                             if tail_value.isupper() and len(tail_value.split()) > 1:
                                                 continue
                                             if HEADER_LABEL_BLOCKLIST.search(tail_value):
