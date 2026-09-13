@@ -35,6 +35,33 @@ ORG_BLOCKLIST = re.compile(
     r"\b(bank|police|court|department|ministry|bureau|team|case|unit|report)\b", re.I
 )
 
+# ─── Centralized surface normalization (prevents duplicate entity_ids) ─
+TITLE_PREFIX_RE = re.compile(
+    r"^(?:mr|mrs|ms|dr|shri|smt|inspector|sub-inspector|si|ig|accused|victim|witness|suspect)\.?\s+",
+    re.IGNORECASE,
+)
+TRAILING_PUNCT_RE = re.compile(r"[.,;:!?\'\"\s]+$")
+LEADING_PUNCT_RE = re.compile(r"^[.,;:!?\'\"\s]+")
+
+
+def clean_entity_surface(raw_val: str, entity_type: str) -> str:
+    """
+    Normalize entity surface before hashing/dedup:
+      - strip leading/trailing punctuation/whitespace
+      - for PERSON, strip honorifics/titles (Mr., SI, suspect, etc.)
+      - collapse internal whitespace
+    Deterministic, no inference.
+    """
+    val = raw_val.strip()
+    val = LEADING_PUNCT_RE.sub("", val)
+    val = TRAILING_PUNCT_RE.sub("", val)
+    if entity_type == "PERSON":
+        val = TITLE_PREFIX_RE.sub("", val)
+        val = LEADING_PUNCT_RE.sub("", val)
+        val = TRAILING_PUNCT_RE.sub("", val)
+    val = re.sub(r"\s+", " ", val).strip()
+    return val
+
 
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
@@ -62,9 +89,12 @@ def extract_entities(pages: list[dict]) -> list[dict]:
 
             claimed: list[tuple[int, int]] = []
 
-            # 1) Structural regex extraction
+            # 1) Structural regex extraction (with centralized cleaning)
             for m in PHONE_RE.finditer(text):
-                value = _clean(m.group(0))
+                raw_val = m.group(0)
+                value = clean_entity_surface(raw_val, "PHONE")
+                if not value:
+                    continue
                 digits = re.sub(r"\D", "", value)
                 # 10–13 digits, or short internal extensions like 555-0100
                 if 6 <= len(digits) <= 13 and not re.fullmatch(r"\d{4}[-.\s]\d{4}", value):
@@ -76,8 +106,11 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                     })
 
             for m in ACCOUNT_RE.finditer(text):
-                value = next((g for g in m.groups() if g), None)
-                if value:
+                raw_val = next((g for g in m.groups() if g), None)
+                if raw_val:
+                    value = clean_entity_surface(raw_val, "BANK_ACCOUNT")
+                    if not value:
+                        continue
                     claimed.append((m.start(), m.end()))
                     entities.append({
                         "entity_type": "BANK_ACCOUNT", "value": value, "snippet": text,
@@ -86,7 +119,10 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                     })
 
             for m in VEHICLE_RE.finditer(text):
-                value = _clean(m.group(1))
+                raw_val = m.group(1)
+                value = clean_entity_surface(raw_val, "VEHICLE")
+                if not value:
+                    continue
                 claimed.append((m.start(), m.end()))
                 entities.append({
                     "entity_type": "VEHICLE", "value": value, "snippet": text,
@@ -105,18 +141,20 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                     label = NER_LABEL_MAP.get(ent.label_)
                     if not label:
                         continue
-                    value = _clean(ent.text)
+                    raw_val = ent.text
+                    value = clean_entity_surface(raw_val, label)
                     if len(value) < 2 or _claimed(ent.start_char, ent.end_char):
                         continue
                     if label == "ORG" and ORG_BLOCKLIST.search(value):
                         continue
                     if label in {"PERSON", "ORG"}:
-                        # Strip report-style designators so "Subject Rohan Mehra"
-                        # resolves to the same person as "Rohan Mehra".
+                        # Legacy report-style designators not covered by TITLE_PREFIX_RE
+                        # (e.g., subject/informant) — keep for backward compat
                         value = re.sub(
-                            r"^(subject|suspect|witness|victim|informant|mr|mrs|ms|dr)\s+",
+                            r"^(subject|informant)\s+",
                             "", value, flags=re.I,
                         )
+                        value = clean_entity_surface(value, label)
                         # NER spans sometimes swallow a connector plus the next
                         # entity ("Maya Iyer to Hyderabad"). Keep the portion
                         # before the connector as this entity, and re-run NER on
@@ -125,29 +163,36 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                         parts = re.split(
                             r"\s+(?:to|with|from|at)\s+", value, flags=re.I, maxsplit=1
                         )
-                        value = parts[0].strip()
+                        value = clean_entity_surface(parts[0].strip(), label)
                         if len(parts) > 1:
-                            tail = parts[1].strip()
-                            tail_ents = nlp(tail).ents if nlp is not None else []
-                            if tail_ents:
-                                for tail_ent in tail_ents:
-                                    tail_label = NER_LABEL_MAP.get(tail_ent.label_)
-                                    tail_value = _clean(tail_ent.text)
-                                    if tail_label and len(tail_value) >= 2:
-                                        entities.append({
-                                            "entity_type": tail_label, "value": tail_value,
-                                            "snippet": text, "page": page_no, "paragraph": para_no,
-                                            "extractor": "spacy.ner", "confidence": 0.7,
-                                        })
-                            elif tail and tail[0].isupper() and len(tail.split()) <= 3:
-                                # Deterministic fallback: a title-case tail after a
-                                # PERSON+connector is usually a place ("…to Hyderabad")
-                                # that the small NER model misses on bare tokens.
-                                entities.append({
-                                    "entity_type": "LOCATION", "value": _clean(tail),
-                                    "snippet": text, "page": page_no, "paragraph": para_no,
-                                    "extractor": "spacy.ner.tail", "confidence": 0.55,
-                                })
+                            tail = clean_entity_surface(parts[1].strip(), "LOCATION")
+                            if tail:
+                                tail_ents = nlp(tail).ents if nlp is not None else []
+                                if tail_ents:
+                                    for tail_ent in tail_ents:
+                                        tail_label = NER_LABEL_MAP.get(tail_ent.label_)
+                                        tail_raw = tail_ent.text
+                                        tail_value = clean_entity_surface(tail_raw, tail_label or "LOCATION")
+                                        if tail_label and len(tail_value) >= 2:
+                                            entities.append({
+                                                "entity_type": tail_label, "value": tail_value,
+                                                "snippet": text, "page": page_no, "paragraph": para_no,
+                                                "extractor": "spacy.ner", "confidence": 0.7,
+                                            })
+                                elif tail and tail[0].isupper() and len(tail.split()) <= 3:
+                                    # Deterministic fallback: a title-case tail after a
+                                    # PERSON+connector is usually a place ("…to Hyderabad")
+                                    # that the small NER model misses on bare tokens.
+                                    entities.append({
+                                        "entity_type": "LOCATION", "value": tail,
+                                        "snippet": text, "page": page_no, "paragraph": para_no,
+                                        "extractor": "spacy.ner.tail", "confidence": 0.55,
+                                    })
+                        if len(value) < 2:
+                            continue
+                    else:
+                        # For LOCATION etc., already cleaned, but ensure
+                        value = clean_entity_surface(value, label)
                         if len(value) < 2:
                             continue
                     conf = 0.85 if label == "PERSON" else 0.75
