@@ -4,7 +4,7 @@ Case CRUD with role-based access control and case assignments.
 Investigators see only their assigned cases. Admins see all.
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Header, Query
 from app.auth.models import CaseCreate, CaseUpdate, CaseOut, CaseAssignment
 from app.auth.dependencies import get_current_user, require_role, require_case_access
 from app.db.postgres import get_pool
@@ -209,8 +209,17 @@ async def update_case(case_id: str, body: CaseUpdate, current_user: dict = Depen
 
 
 @router.delete("/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_case(case_id: str, current_user: dict = Depends(require_role("admin"))):
-    """Delete a case and all its data. Admin only. Hard delete with Postgres cascade + Neo4j reconciliation."""
+async def delete_case(
+    case_id: str,
+    current_user: dict = Depends(require_role("admin")),
+    code: str | None = Query(None, alias="code"),
+    x_delete_code: str | None = Header(None, alias="X-Delete-Code"),
+):
+    """Delete a case and all its data. Admin only. Requires confirmation code 24227 via ?code=24227 or X-Delete-Code header."""
+    # Confirmation code gate — prevents accidental deletes
+    confirm = code or x_delete_code
+    if confirm != "24227":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmation code required: enter 24227 to delete")
     pool = await get_pool()
     row = await pool.fetchrow("SELECT id, name FROM cases WHERE id = $1", case_id)
     if not row:

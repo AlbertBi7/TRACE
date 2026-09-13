@@ -45,6 +45,7 @@ export default function CaseDetailPage() {
   const [suspectsForClosure, setSuspectsForClosure] = useState([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingCase, setDeletingCase] = useState(false);
+  const [deleteCodeDetail, setDeleteCodeDetail] = useState('');
   const fileInputRef = useRef(null);
 
   const fetchCase = async () => {
@@ -203,13 +204,17 @@ export default function CaseDetailPage() {
   };
 
   const handleDeleteCase = async () => {
+    if (deleteCodeDetail !== '24227') {
+      setActionError('Confirmation code must be 24227');
+      return;
+    }
     setDeletingCase(true);
     setActionError('');
     try {
-      await api.delete(`/api/cases/${caseId}`);
+      await api.delete(`/api/cases/${caseId}?code=24227`, { headers: { 'X-Delete-Code': '24227' } });
       navigate('/dashboard');
     } catch (err) {
-      setActionError(err.response?.data?.detail || 'Delete failed — admin only');
+      setActionError(err.response?.data?.detail || 'Delete failed — admin only / bad code');
       setShowDeleteConfirm(false);
     } finally {
       setDeletingCase(false);
@@ -358,7 +363,7 @@ export default function CaseDetailPage() {
           >
             {isOpen ? <><Lock className="w-4 h-4"/> Close Case</> : <><Unlock className="w-4 h-4"/> Reopen Case</>}
           </button>
-          <button onClick={()=>setShowDeleteConfirm(true)} title="Delete case (admin)" className="p-2.5 rounded-xl hover:bg-red-500/10 text-trace-text-dim hover:text-red-400 border border-transparent hover:border-red-500/20 transition-colors">
+          <button onClick={()=>{setDeleteCodeDetail(''); setShowDeleteConfirm(true)}} title="Delete case (admin) — requires code 24227" className="p-2.5 rounded-xl hover:bg-red-500/10 text-trace-text-dim hover:text-red-400 border border-transparent hover:border-red-500/20 transition-colors">
             <Trash2 className="w-4 h-4"/>
           </button>
         </div>
@@ -432,16 +437,22 @@ export default function CaseDetailPage() {
         </div>
       )}
 
-      {/* Delete Confirm — admin hard delete */}
+      {/* Delete Confirm — admin hard delete, code 24227 */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="glass rounded-2xl p-6 w-full max-w-md animate-slide-in-up border border-red-500/20">
             <div className="w-12 h-12 rounded-full bg-red-500/15 flex items-center justify-center mx-auto mb-4"><Trash2 className="w-6 h-6 text-red-400"/></div>
             <h2 className="text-lg font-semibold text-trace-text text-center">Delete case permanently?</h2>
             <p className="text-sm text-trace-text-muted text-center mt-2">This will permanently delete <span className="text-white font-medium">“{caseData.name}”</span> and all its documents, extractions, and graph data. Audited as <span className="font-mono text-xs">CASE_DELETED</span>. Cannot be undone.</p>
+            <div className="mt-4">
+              <label className="text-xs font-medium text-trace-text">Type <span className="font-mono text-red-300">24227</span> to confirm</label>
+              <input value={deleteCodeDetail} onChange={e=>setDeleteCodeDetail(e.target.value)} placeholder="24227" className="input-field mt-1 font-mono text-center tracking-widest" autoFocus />
+              {deleteCodeDetail && deleteCodeDetail !== '24227' && <p className="text-xs text-red-400 mt-1">Code must be 24227</p>}
+              {deleteCodeDetail === '24227' && <p className="text-xs text-emerald-400 mt-1">✓ Code confirmed</p>}
+            </div>
             <div className="flex gap-3 mt-6">
-              <button onClick={()=>setShowDeleteConfirm(false)} className="btn-secondary flex-1" disabled={deletingCase}>Cancel</button>
-              <button onClick={handleDeleteCase} disabled={deletingCase} className="flex-1 bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50">{deletingCase ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Trash2 className="w-4 h-4"/>} {deletingCase ? 'Deleting…' : 'Delete forever'}</button>
+              <button onClick={()=>{setShowDeleteConfirm(false); setDeleteCodeDetail('');}} className="btn-secondary flex-1" disabled={deletingCase}>Cancel</button>
+              <button onClick={handleDeleteCase} disabled={deletingCase || deleteCodeDetail !== '24227'} className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-400 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50">{deletingCase ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Trash2 className="w-4 h-4"/>} {deletingCase ? 'Deleting…' : 'Delete forever'}</button>
             </div>
           </div>
         </div>
