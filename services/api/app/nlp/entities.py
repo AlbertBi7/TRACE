@@ -53,6 +53,55 @@ LABEL_STRIP_WORDS = [
     "date of occurrence", "alibi corroboration", "investigation report",
 ]
 
+# ─── Contextual PERSON vs LOCATION disambiguation ─────────────────
+LOCATION_INDICATORS = {
+    "junction", "quarry", "depot", "road", "street", "estate", "district",
+    "station", "outskirts", "colony", "nagar", "town", "city", "village",
+    "bridge", "highway", "hall", "ps", "court",
+}
+
+LOCATION_PREPOSITIONS_RE = re.compile(
+    r"\b(?:at|near|in|to|from|towards|through|around|heading\s+to|located\s+in|outside)\s+$",
+    re.IGNORECASE,
+)
+
+PERSON_INDICATORS_RE = re.compile(
+    r"\b(?:spoke\s+to|called|travelled\s+with|interrogated|questioned|met\s+with|interviewed|driver|conductor|operator)\s+$",
+    re.IGNORECASE,
+)
+
+
+def refine_entity_type(val: str, initial_type: str, sentence_prefix: str) -> str:
+    """
+    Refines PERSON vs LOCATION using surrounding context and entity tokens.
+    Deterministic, no LLM.
+    """
+    lower_val = val.lower()
+    tokens = set(lower_val.split())
+
+    # 1. Indicator keyword override
+    if tokens & LOCATION_INDICATORS:
+        return "LOCATION"
+
+    # 2. Syntactic preceding context cues
+    if LOCATION_PREPOSITIONS_RE.search(sentence_prefix):
+        if initial_type in ("PERSON", "ORG"):
+            return "LOCATION"
+    # Fallback for "near the X", "at the X" where prefix ends with "the " but contains preposition just before
+    elif re.search(r"\b(?:at|near|in|to|from|towards|through|around|heading\s+to|located\s+in|outside)\s+the\s+$", sentence_prefix, re.I):
+        if initial_type in ("PERSON", "ORG"):
+            return "LOCATION"
+
+    if PERSON_INDICATORS_RE.search(sentence_prefix):
+        if initial_type in ("LOCATION", "GPE", "ORG"):
+            return "PERSON"
+
+    # 3. Standardize GPE -> LOCATION
+    if initial_type in ("GPE", "LOC"):
+        return "LOCATION"
+
+    return initial_type
+
 # ─── Centralized surface normalization (prevents duplicate entity_ids) ─
 TITLE_PREFIX_RE = re.compile(
     r"^(?:mr|mrs|ms|dr|shri|smt|inspector|sub-inspector|si|ig|accused|victim|witness|suspect)\.?\s+",
@@ -222,6 +271,18 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                     if len(value) < 2 or _claimed(ent.start_char, ent.end_char):
                         continue
 
+                    # ── Contextual PERSON vs LOCATION disambiguation ──────
+                    # Inspect sentence prefix (up to 80 chars before entity) for spatial cues
+                    sentence_prefix = text[max(0, ent.start_char - 80):ent.start_char]
+                    # Ensure trailing space for regex \s+$ matching
+                    refined = refine_entity_type(value, label, sentence_prefix + " ")
+                    if refined != label:
+                        # Re-clean with correct type's rules
+                        value = clean_entity_surface(value, refined)
+                        label = refined
+                        if len(value) < 2:
+                            continue
+
                     # ── Header / form-label noise filters ─────────────────
                     # 1) All-caps headers like "RECORDED & ALIBI CORROBORATION"
                     if value.isupper() and len(value.split()) > 1:
@@ -306,6 +367,12 @@ def extract_entities(pages: list[dict]) -> list[dict]:
                                             tail_raw = tail_ent.text
                                             tail_value = clean_entity_surface(tail_raw, tail_label or "LOCATION")
                                             tail_value = _strip_label_collocations(tail_value, tail_label or "LOCATION")
+                                            # Contextual refinement for tail as well
+                                            tail_prefix = tail[max(0, tail_ent.start_char - 40):tail_ent.start_char] if hasattr(tail_ent, 'start_char') else ""
+                                            refined_tail = refine_entity_type(tail_value, tail_label or "LOCATION", tail_prefix + " ")
+                                            if refined_tail != (tail_label or "LOCATION"):
+                                                tail_value = clean_entity_surface(tail_value, refined_tail)
+                                                tail_label = refined_tail
                                             if tail_value.isupper() and len(tail_value.split()) > 1:
                                                 continue
                                             if HEADER_LABEL_BLOCKLIST.search(tail_value):
